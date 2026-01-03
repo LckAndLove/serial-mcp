@@ -1,0 +1,15 @@
+{
+  "serial": {
+    "port": "COM11",
+    "baudRate": 115200
+  },
+  "db": {
+    "path": "../serial-db/serial.db"
+  },
+  "response": {
+    "mode": "delimiter",
+    "delimiter": "\r\n",
+    "timeout": 3000,
+    "maxBytes": 1024
+  }
+}
