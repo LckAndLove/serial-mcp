@@ -1,0 +1,10 @@
+{
+  "name": "serial-db",
+  "dependencies": {
+    "serialport": "*",
+    "better-sqlite3": "*"
+  },
+  "scripts": {
+    "start": "node listener.js"
+  }
+}
