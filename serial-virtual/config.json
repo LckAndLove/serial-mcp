@@ -1,7 +1,7 @@
 {
   "virtualPort": {
-    "portA": "COM10",
-    "portB": "COM11",
+    "portA": "COM55",
+    "portB": "COM44",
     "baudRate": 115200,
     "autoOutputInterval": 1000
   }
