@@ -1,6 +1,6 @@
 {
   "serial": {
-    "port": "COM44",
+    "port": "COM3",
     "baudRate": 115200,
     "delimiter": "\r\n"
   },

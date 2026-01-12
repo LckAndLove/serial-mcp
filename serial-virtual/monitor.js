@@ -28,7 +28,7 @@ function loadConfig() {
 
 const { port: portPath, baudRate } = loadConfig();
 
-// 连接虚拟串口（portB = COM44）
+// 连接虚拟串口（portB = COM3）
 const port = new SerialPort({
   path: portPath,
   baudRate: baudRate,
