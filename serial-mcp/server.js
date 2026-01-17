@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 
 import Database from "better-sqlite3";
 import { SerialPort } from "serialport";
@@ -11,6 +12,8 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+
+const LISTENER_HTTP = "localhost:7070";
 
 // 解析当前文件目录，用于放置本地 SQLite 数据库文件
 const __filename = fileURLToPath(import.meta.url);
@@ -233,6 +236,44 @@ async function waitResponse(serialPort, { mode, delimiter, timeout }) {
   });
 }
 
+function httpPost(host, body) {
+  return new Promise((resolve, reject) => {
+    const [hostname, port] = host.split(":");
+    const options = {
+      hostname,
+      port: port || 80,
+      path: "/send",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    };
+
+    const req = http.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(json);
+          } else {
+            reject(new Error(json.error || `HTTP ${res.statusCode}`));
+          }
+        } catch {
+          reject(new Error(`Invalid response: ${data}`));
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 const tools = [
   {
     name: "list_ports",
@@ -390,18 +431,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "send_data": {
         const port = String(args.port);
-        const payload = toBuffer(args.data, String(args.encoding));
-        const state = getOpenedPortState(port);
+        const data = String(args.data);
+        const encoding = String(args.encoding || "text");
 
-        await writeAndDrain(state.serialPort, payload);
-
-        writeLog({
-          port,
-          direction: "tx",
-          buffer: payload,
+        // 通过 HTTP 转发给 listener 写入串口
+        const result = await httpPost(`${LISTENER_HTTP}/send`, {
+          data,
+          encoding,
+          session_id: activeSessionId,
         });
 
-        return jsonResult({ success: true, bytesSent: payload.length });
+        return jsonResult({ success: true, ...result });
       }
 
       case "read_latest": {
@@ -471,25 +511,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const delimiter = args.delimiter != null ? String(args.delimiter) : undefined;
         const timeout = Number(args.timeout);
 
-        const state = getOpenedPortState(port);
-        const payload = Buffer.from(data, "utf8");
-
-        // 先发送命令并记录 direction=tx
-        await writeAndDrain(state.serialPort, payload);
-        writeLog({
-          port,
-          direction: "tx",
-          buffer: payload,
+        // 通过 HTTP 发送指令，listener 会写入串口并记录 tx
+        await httpPost(`${LISTENER_HTTP}/send`, {
+          data,
+          encoding: "text",
+          session_id: activeSessionId,
         });
 
-        // 再等待响应，返回响应文本和耗时
-        const result = await waitResponse(state.serialPort, {
-          mode,
-          delimiter,
-          timeout,
-        });
+        // 轮询数据库等待 rx 响应
+        const startedAt = Date.now();
+        let all = "";
 
-        return jsonResult(result);
+        const pollInterval = 50;
+        const maxWait = timeout;
+
+        while (Date.now() - startedAt < maxWait) {
+          await sleep(pollInterval);
+
+          const rows = db
+            ? db.prepare(`
+                SELECT id, port, direction, data_text, data_hex, session_id, timestamp
+                FROM serial_logs
+                WHERE port = ? AND direction = 'rx' AND session_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+              `).all(port, activeSessionId)
+            : [];
+
+          if (rows.length > 0) {
+            const lastRx = rows[0].data_text || "";
+            all = lastRx;
+
+            // delimiter 模式下检测到分隔符就返回
+            if (mode === "delimiter" && delimiter && all.includes(delimiter)) {
+              return jsonResult({
+                response: all,
+                duration: Date.now() - startedAt,
+              });
+            }
+
+            // timeout 模式下直接返回
+            if (mode === "timeout") {
+              return jsonResult({
+                response: all,
+                duration: Date.now() - startedAt,
+              });
+            }
+          }
+        }
+
+        // 超时返回
+        return jsonResult({
+          response: all,
+          duration: Date.now() - startedAt,
+          timedOut: true,
+        });
       }
 
       case "new_session": {
