@@ -435,7 +435,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const encoding = String(args.encoding || "text");
 
         // 通过 HTTP 转发给 listener 写入串口
-        const result = await httpPost(`${LISTENER_HTTP}/send`, {
+        const result = await httpPost(LISTENER_HTTP, {
           data,
           encoding,
           session_id: activeSessionId,
@@ -512,7 +512,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const timeout = Number(args.timeout);
 
         // 通过 HTTP 发送指令，listener 会写入串口并记录 tx
-        await httpPost(`${LISTENER_HTTP}/send`, {
+        await httpPost(LISTENER_HTTP, {
           data,
           encoding: "text",
           session_id: activeSessionId,
