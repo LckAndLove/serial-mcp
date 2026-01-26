@@ -27,7 +27,6 @@ function logToFile(...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] ${msg}`;
-  console.log(...args); // 保留原控制台输出
   fs.appendFileSync(LOG_FILE, line + "\n");
 }
 
@@ -36,7 +35,6 @@ function logErrorToFile(...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] ${msg}`;
-  console.error(...args); // 保留原控制台输出
   fs.appendFileSync(LOG_FILE, line + "\n");
 }
 
@@ -57,10 +55,15 @@ let db = null;
 let insertLogStmt = null;
 
 function jsonResult(payload, isError = false) {
+  const safePayload =
+    payload !== null && typeof payload === "object"
+      ? { ...payload }
+      : { value: payload };
+
   return {
-    isError,
-    content: [{ type: "text", text: JSON.stringify(payload) }],
-    structuredContent: payload,
+    isError: Boolean(isError),
+    content: [{ type: "text", text: JSON.stringify(safePayload) }],
+    structuredContent: safePayload,
   };
 }
 
