@@ -15,12 +15,12 @@ import {
 
 const LISTENER_HTTP = "localhost:7070";
 
-// 日志文件路径
-const LOG_FILE = path.join(__dirname, "mcp.log");
-
-// 解析当前文件目录，用于放置本地 SQLite 数据库文件
+// 解析当前文件目录，用于 __dirname 和放置本地 SQLite 数据库文件
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 日志文件路径
+const LOG_FILE = path.join(__dirname, "mcp.log");
 
 // 封装日志写入，同时输出到控制台和日志文件
 function logToFile(...args) {
