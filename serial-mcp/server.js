@@ -536,76 +536,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const port = String(args.port);
         const data = String(args.data);
         const mode = String(args.mode);
-        const delimiter = args.delimiter != null ? String(args.delimiter) : undefined;
         const timeout = Number(args.timeout);
+        const encoding = String(args.encoding || "text");
 
-        // 发送指令前的时间戳 t0，用于过滤 rx 数据
         const t0 = Date.now();
-        console.error(`[send_and_wait] t0=${t0} port=${port} session=${activeSessionId} data=${JSON.stringify(data)}`);
 
-        // 通过 HTTP 发送指令，listener 会写入串口并记录 tx
-        await httpPost(LISTENER_HTTP, {
-          data,
-          encoding: "text",
-          session_id: activeSessionId,
-        });
+        // 发送指令到 listener
+        await httpPost("http://localhost:7070/send", { data, encoding });
 
-        // 轮询数据库等待 rx 响应
-        const startedAt = Date.now();
-        let all = "";
-
-        const pollInterval = 50;
-        const maxWait = timeout;
-
-        console.error(`[send_and_wait] 开始轮询，timeout=${maxWait}`);
-
-        while (Date.now() - startedAt < maxWait) {
-          await sleep(pollInterval);
-
-          const sql = `
-            SELECT id, port, direction, text, raw, session_id, timestamp
-            FROM serial_data
-            WHERE direction = 'rx' AND timestamp > ?
-            ORDER BY id DESC
-            LIMIT 1
-          `;
-
-          const rows = db
-            ? db.prepare(sql).all(t0)
-            : [];
-
-          console.error(`[send_and_wait] poll sql=${sql.replace(/\s+/g, ' ').trim()} params=[${t0}] rows=${rows.length}`);
-
+        // 简单轮询等待响应
+        let response = "";
+        while (Date.now() - t0 < timeout) {
+          await new Promise(r => setTimeout(r, 100));
+          const rows = db.prepare(
+            "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? ORDER BY id ASC LIMIT 1"
+          ).all(t0);
           if (rows.length > 0) {
-            console.error(`[send_and_wait] 收到数据: ${JSON.stringify(rows[0])}`);
-            const lastRx = rows[0].text || "";
-            all = lastRx;
-
-            // delimiter 模式下检测到分隔符就返回
-            if (mode === "delimiter") {
-              return jsonResult({
-                response: all,
-                duration: Date.now() - startedAt,
-              });
-            }
-
-            // timeout 模式下直接返回
-            if (mode === "timeout") {
-              return jsonResult({
-                response: all,
-                duration: Date.now() - startedAt,
-              });
-            }
+            response = rows[0].text || "";
+            break;
           }
         }
 
-        // 超时返回
-        console.error(`[send_and_wait] 超时，all=${JSON.stringify(all)}`);
-        return jsonResult({
-          response: all,
-          duration: Date.now() - startedAt,
-          timedOut: true,
-        });
+        const timedOut = response === "";
+        return {
+          isError: false,
+          content: [{ type: "text", text: JSON.stringify({ success: true, response, duration: Date.now() - t0, timedOut }) }]
+        };
       }
 
       case "new_session": {
