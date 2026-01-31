@@ -24,9 +24,11 @@
 ## 快速开始
 
 ### 1. 安装依赖
+```bash
 cd serial-virtual && npm install
 cd ../serial-db && npm install
 cd ../serial-mcp && npm install
+```
 
 ### 2. 配置虚拟串口
 使用 ELTIMA VSP 或 com0com 创建一对虚拟串口，
@@ -40,7 +42,9 @@ cd ../serial-mcp && npm install
 项目根目录已包含 .mcp.json，重启 Claude Code 即可自动连接。
 
 ### 5. 配置 Codex CLI
+```bash
 codex mcp add serial -- node "项目路径\serial-mcp\server.js"
+```
 
 ## MCP 工具列表
 - list_ports        扫描可用串口
