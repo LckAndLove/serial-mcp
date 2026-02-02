@@ -1,3 +1,10 @@
 node_modules
 *.db
 .env
+
+# Claude 本地设置
+.claude/
+
+# SQLite 临时文件
+*.db-shm
+*.db-wal
