@@ -13,14 +13,38 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const LISTENER_HTTP = "localhost:7070";
-
 // 解析当前文件目录，用于 __dirname 和放置本地 SQLite 数据库文件
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // 日志文件路径
 const LOG_FILE = path.join(__dirname, "mcp.log");
+
+function loadRuntimeConfig() {
+  const configPath = path.join(__dirname, "config.json");
+  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+}
+
+function buildListenerSendUrl(rawUrl) {
+  const text = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  if (!text) {
+    throw new Error("config.json 缺少 listener.url 配置");
+  }
+
+  const endpoint = new URL(text);
+  if (endpoint.protocol !== "http:") {
+    throw new Error("listener.url 必须是 http:// 协议");
+  }
+
+  if (!endpoint.pathname || endpoint.pathname === "/") {
+    endpoint.pathname = "/send";
+  }
+
+  return endpoint.toString();
+}
+
+const runtimeConfig = loadRuntimeConfig();
+const LISTENER_SEND_URL = buildListenerSendUrl(runtimeConfig.listener?.url);
 
 // 封装日志写入，同时输出到控制台和日志文件
 function logToFile(...args) {
@@ -264,13 +288,14 @@ async function waitResponse(serialPort, { mode, delimiter, timeout }) {
   });
 }
 
-function httpPost(host, body) {
+function httpPost(urlText, body) {
   return new Promise((resolve, reject) => {
-    const [hostname, port] = host.split(":");
+    const endpoint = new URL(urlText);
+    const requestPath = endpoint.pathname && endpoint.pathname !== "" ? endpoint.pathname : "/send";
     const options = {
-      hostname,
-      port: port || 80,
-      path: "/send",
+      hostname: endpoint.hostname,
+      port: endpoint.port || 80,
+      path: requestPath,
       method: "POST",
       headers: { "Content-Type": "application/json" },
     };
@@ -463,7 +488,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const encoding = String(args.encoding || "text");
 
         // 通过 HTTP 转发给 listener 写入串口
-        const result = await httpPost(LISTENER_HTTP, {
+        const result = await httpPost(LISTENER_SEND_URL, {
           data,
           encoding,
           session_id: activeSessionId,
@@ -538,7 +563,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const timeout = Number(args.timeout);
         const t0 = Date.now();
 
-        await httpPost(LISTENER_HTTP, {
+        await httpPost(LISTENER_SEND_URL, {
           data,
           encoding,
         });
@@ -628,9 +653,7 @@ async function shutdown() {
 
 function initDatabase() {
   // 从 config.json 读取数据库路径
-  const configPath = path.join(__dirname, "config.json");
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const dbPath = path.resolve(__dirname, config.db?.path || "../serial-db/serial.db");
+  const dbPath = path.resolve(__dirname, runtimeConfig.db?.path || "../serial-db/serial.db");
   const dbDir = path.dirname(dbPath);
 
   // 确保数据库目录存在，避免首次启动时报错

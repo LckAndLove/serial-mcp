@@ -6,6 +6,9 @@
   "db": {
     "path": "../serial-db/serial.db"
   },
+  "listener": {
+    "url": "http://localhost:7070"
+  },
   "response": {
     "mode": "delimiter",
     "delimiter": "\r\n",

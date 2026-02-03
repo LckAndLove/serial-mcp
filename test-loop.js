@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -8,6 +9,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const mcpDir = path.join(__dirname, "serial-mcp");
 const serverEntry = path.join(mcpDir, "server.js");
+const mcpConfigPath = path.join(mcpDir, "config.json");
+const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"));
 
 // 从 serial-mcp 目录解析 SDK，避免根目录无 node_modules 时无法加载
 const require = createRequire(import.meta.url);
@@ -96,8 +99,11 @@ try {
     }
   }
 
-  // 3. 打开 COM3，波特率 115200
-  const targetPort = "COM3";
+  // 3. 打开配置中的串口，波特率 115200
+  const targetPort = String(mcpConfig?.serial?.port || "").trim();
+  if (!targetPort) {
+    throw new Error("serial-mcp/config.json 缺少 serial.port 配置");
+  }
   await callTool(client, "open_port", {
     port: targetPort,
     baudRate: 115200,

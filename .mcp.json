@@ -2,7 +2,7 @@
   "mcpServers": {
     "serial": {
       "command": "node",
-      "args": ["D:\\LCK\\COM\\serial-mcp\\server.js"]
+      "args": ["./serial-mcp/server.js"]
     }
   }
 }

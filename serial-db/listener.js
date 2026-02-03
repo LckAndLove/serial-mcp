@@ -20,14 +20,29 @@ function formatTimestamp(date = new Date()) {
 async function main() {
   const serialCfg = config.serial || {};
   const dbCfg = config.db || {};
+  const httpCfg = config.http || {};
 
-  // 端口参数按需求默认 COM3 / 115200，且支持从配置覆盖
-  const portName = serialCfg.port || 'COM3';
+  const configuredPort = typeof serialCfg.port === 'string' ? serialCfg.port.trim() : '';
+  if (!configuredPort) {
+    console.error(`[${formatTimestamp()}] 配置错误: config.json 缺少 serial.port`);
+    process.exit(1);
+    return;
+  }
+
+  // 串口参数从配置读取，未配置波特率时使用默认值
+  const portName = configuredPort;
   const baudRate = Number(serialCfg.baudRate || 115200);
   const delimiter = serialCfg.delimiter || '\r\n';
   const cleanupInterval = Number(dbCfg.cleanupInterval || 60000);
   const dbPath = dbCfg.path || './serial.db';
   const maxRows = Number(dbCfg.maxRows || 10000);
+  const HTTP_PORT = Number(httpCfg.port);
+
+  if (!Number.isInteger(HTTP_PORT) || HTTP_PORT <= 0) {
+    console.error(`[${formatTimestamp()}] 配置错误: config.json 缺少有效的 http.port`);
+    process.exit(1);
+    return;
+  }
 
   // 实例化数据库
   const serialDb = new SerialDB(dbPath);
@@ -48,7 +63,6 @@ async function main() {
   });
 
   // HTTP 服务：转发指令到串口
-  const HTTP_PORT = 7070;
   const httpServer = http.createServer((req, res) => {
     // CORS 头
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -132,6 +146,15 @@ async function main() {
 
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found' }));
+  });
+
+  httpServer.on('error', (err) => {
+    if (err?.code === 'EADDRINUSE') {
+      console.error(`[${formatTimestamp()}] HTTP 端口 ${HTTP_PORT} 已被占用，请先停止已有 listener 进程`);
+    } else {
+      console.error(`[${formatTimestamp()}] HTTP 服务启动失败:`, err.message || err);
+    }
+    process.exit(1);
   });
 
   httpServer.listen(HTTP_PORT, () => {
