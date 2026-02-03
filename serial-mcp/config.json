@@ -10,9 +10,6 @@
     "url": "http://localhost:7070"
   },
   "response": {
-    "mode": "delimiter",
-    "delimiter": "\r\n",
-    "timeout": 3000,
-    "maxBytes": 1024
+    "timeout": 3000
   }
 }

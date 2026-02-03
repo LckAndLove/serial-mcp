@@ -47,9 +47,9 @@ async function main() {
   // 实例化数据库
   const serialDb = new SerialDB(dbPath);
 
-  // 启动时自动创建新 session，并打印 session_id
-  const sessionId = serialDb.newSession();
-  console.log(`current session_id: ${sessionId}`);
+  // 当前活动会话，支持通过 HTTP /session 动态切换
+  let activeSessionId = serialDb.newSession();
+  console.log(`current session_id: ${activeSessionId}`);
 
   // 建立串口连接
   const port = new SerialPort({ path: portName, baudRate });
@@ -83,7 +83,7 @@ async function main() {
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
         try {
-          const { data, encoding = 'text' } = JSON.parse(body);
+          const { data, encoding = 'text', session_id } = JSON.parse(body);
           if (!data) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'data is required' }));
@@ -92,6 +92,11 @@ async function main() {
 
           // 转义 \r\n 为真实回车换行符
           const escaped = data.replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+
+          const effectiveSessionId =
+            typeof session_id === 'string' && session_id.trim()
+              ? session_id.trim()
+              : activeSessionId;
 
           // 写入串口
           const payload = encoding === 'hex'
@@ -114,7 +119,7 @@ async function main() {
                   direction: 'tx',
                   raw: payload,
                   text: payload.toString('utf8'),
-                  session_id: sessionId
+                  session_id: effectiveSessionId
                 });
               } catch (dbErr) {
                 console.error(`[${formatTimestamp()}] HTTP /send 写库失败:`, dbErr.message);
@@ -132,6 +137,34 @@ async function main() {
       return;
     }
 
+    // POST /session
+    if (req.method === 'POST' && url.pathname === '/session') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const nextSessionId =
+            typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
+
+          if (!nextSessionId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'session_id is required' }));
+            return;
+          }
+
+          activeSessionId = nextSessionId;
+          console.log(`[${formatTimestamp()}] session 切换: ${activeSessionId}`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: activeSessionId }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message || String(err) }));
+        }
+      });
+      return;
+    }
+
     // GET /status
     if (req.method === 'GET' && url.pathname === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -139,7 +172,7 @@ async function main() {
         port: portName,
         baudRate,
         isOpen: port.isOpen,
-        sessionId
+        sessionId: activeSessionId
       }));
       return;
     }
@@ -157,8 +190,8 @@ async function main() {
     process.exit(1);
   });
 
-  httpServer.listen(HTTP_PORT, () => {
-    console.log(`[${formatTimestamp()}] HTTP 服务已启动: http://localhost:${HTTP_PORT}`);
+  httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
+    console.log(`[${formatTimestamp()}] HTTP 服务已启动: http://127.0.0.1:${HTTP_PORT}`);
   });
 
   // 使用 \r\n 分隔解析数据（按配置可覆盖）
@@ -184,7 +217,7 @@ async function main() {
           direction: 'rx',
           raw: Buffer.from(raw, 'utf8'),
           text: raw,
-          session_id: sessionId
+          session_id: activeSessionId
         });
       } catch (err) {
         console.error(`[${formatTimestamp()}] 写库失败:`, err.message || err);
