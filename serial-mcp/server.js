@@ -44,6 +44,9 @@ function buildListenerUrl(rawUrl, pathname) {
 const runtimeConfig = loadRuntimeConfig();
 const LISTENER_SEND_URL = buildListenerUrl(runtimeConfig.listener?.url, "/send");
 const LISTENER_SESSION_URL = buildListenerUrl(runtimeConfig.listener?.url, "/session");
+const LISTENER_CONNECT_URL = buildListenerUrl(runtimeConfig.listener?.url, "/connect");
+const LISTENER_DISCONNECT_URL = buildListenerUrl(runtimeConfig.listener?.url, "/disconnect");
+const LISTENER_STATUS_URL = buildListenerUrl(runtimeConfig.listener?.url, "/status");
 const DEFAULT_RESPONSE_TIMEOUT = Number(runtimeConfig.response?.timeout) > 0
   ? Number(runtimeConfig.response.timeout)
   : 3000;
@@ -70,15 +73,11 @@ const originalConsoleError = console.error;
 console.log = (...args) => { originalConsoleLog(...args); logToFile(...args); };
 console.error = (...args) => { originalConsoleError(...args); logErrorToFile(...args); };
 
-// 已打开串口状态映射：key=端口路径，value=状态对象
-const openPorts = new Map();
-
 // 当前活动 session_id（调用 new_session 后会更新）
 let activeSessionId = null;
 
 // 数据库相关状态（better-sqlite3 为同步初始化）
 let db = null;
-let insertLogStmt = null;
 
 function jsonResult(payload, isError = false) {
   const safePayload =
@@ -112,87 +111,6 @@ function normalizeTimestamp(input) {
   }
 
   throw new Error("timestamp 格式无效，请传 ISO 时间字符串或毫秒时间戳");
-}
-
-function writeLog({ port, direction, buffer, sessionId }) {
-  if (!db || !insertLogStmt) return;
-  // 串口收发统一落库，便于后续按端口/会话追溯（better-sqlite3 使用 run 写入）
-  insertLogStmt.run({
-    port,
-    direction,
-    raw: buffer,
-    text: buffer.toString("utf8"),
-    session_id: sessionId ?? activeSessionId,
-    timestamp: Date.now(),
-  });
-}
-
-async function openPort(port, baudRate) {
-  const existing = openPorts.get(port);
-
-  if (existing?.serialPort?.isOpen) {
-    return { success: true, port };
-  }
-
-  const serialPort =
-    existing?.serialPort ??
-    new SerialPort({
-      path: port,
-      baudRate,
-      autoOpen: false,
-    });
-
-  await new Promise((resolve, reject) => {
-    serialPort.open((err) => (err ? reject(err) : resolve()));
-  });
-
-  // 监听串口接收数据并写入数据库 direction=rx
-  const dataHandler = (chunk) => {
-    try {
-      writeLog({
-        port,
-        direction: "rx",
-        buffer: Buffer.from(chunk),
-      });
-    } catch (err) {
-      console.error(`[serial-mcp] 写入 rx 失败 (${port})`, err);
-    }
-  };
-
-  serialPort.on("data", dataHandler);
-  serialPort.on("error", (err) => {
-    console.error(`[serial-mcp] 串口异常 (${port})`, err);
-  });
-  serialPort.on("close", () => {
-    const state = openPorts.get(port);
-    if (state) {
-      state.isOpen = false;
-    }
-  });
-
-  openPorts.set(port, {
-    serialPort,
-    baudRate,
-    isOpen: true,
-    dataHandler,
-  });
-
-  return { success: true, port };
-}
-
-async function closePort(port) {
-  const state = openPorts.get(port);
-
-  if (!state?.serialPort || !state.serialPort.isOpen) {
-    return { success: true, port };
-  }
-
-  await new Promise((resolve, reject) => {
-    state.serialPort.close((err) => (err ? reject(err) : resolve()));
-  });
-
-  state.isOpen = false;
-  return { success: true, port };
 }
 
 function httpPost(urlText, body) {
@@ -230,6 +148,38 @@ function httpPost(urlText, body) {
   });
 }
 
+function httpGet(urlText) {
+  return new Promise((resolve, reject) => {
+    const endpoint = new URL(urlText);
+    const options = {
+      hostname: endpoint.hostname,
+      port: endpoint.port || 80,
+      path: endpoint.pathname || "/",
+      method: "GET",
+    };
+
+    const req = http.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data || "{}");
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(json);
+          } else {
+            reject(new Error(json.error || `HTTP ${res.statusCode}`));
+          }
+        } catch {
+          reject(new Error(`Invalid response: ${data}`));
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -245,27 +195,27 @@ const tools = [
     },
   },
   {
-    name: "open_port",
-    description: "打开指定串口",
+    name: "connect_port",
+    description: "连接到指定串口。用户告知串口号后调用此工具，支持 Windows (COM5) 和 Linux (/dev/ttyUSB0) 格式。连接成功后自动创建新会话，之前的数据不会丢失。",
     inputSchema: {
       type: "object",
       properties: {
         port: { type: "string" },
         baudRate: { type: "integer", minimum: 1 },
+        dataBits: { type: "integer", enum: [5, 6, 7, 8] },
+        stopBits: { type: "number", enum: [1, 1.5, 2] },
+        parity: { type: "string", enum: ["none", "even", "odd", "mark", "space"] },
       },
-      required: ["port", "baudRate"],
+      required: ["port"],
       additionalProperties: false,
     },
   },
   {
-    name: "close_port",
-    description: "关闭指定串口",
+    name: "disconnect_port",
+    description: "断开当前串口连接",
     inputSchema: {
       type: "object",
-      properties: {
-        port: { type: "string" },
-      },
-      required: ["port"],
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -338,7 +288,7 @@ const tools = [
   },
   {
     name: "get_status",
-    description: "返回当前所有已打开串口的状态",
+    description: "返回当前 listener 串口连接状态（connected/port/baudRate/sessionId）",
     inputSchema: {
       type: "object",
       properties: {},
@@ -379,13 +329,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
       }
 
-      case "open_port": {
-        const result = await openPort(String(args.port), Number(args.baudRate));
+      case "connect_port": {
+        const payload = {
+          port: String(args.port),
+          baudRate: Number(args.baudRate || 115200),
+          dataBits: Number(args.dataBits || 8),
+          stopBits: Number(args.stopBits || 1),
+          parity: String(args.parity || "none"),
+        };
+
+        const result = await httpPost(LISTENER_CONNECT_URL, payload);
+        if (result?.sessionId) {
+          activeSessionId = String(result.sessionId);
+        }
+
         return jsonResult(result);
       }
 
-      case "close_port": {
-        const result = await closePort(String(args.port));
+      case "disconnect_port": {
+        const result = await httpPost(LISTENER_DISCONNECT_URL, {});
         return jsonResult(result);
       }
 
@@ -533,13 +495,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_status": {
-        const ports = [...openPorts.entries()].map(([port, state]) => ({
-          port,
-          baudRate: state.baudRate,
-          isOpen: Boolean(state.serialPort?.isOpen),
-        }));
-
-        return jsonResult({ ports });
+        const status = await httpGet(LISTENER_STATUS_URL);
+        return jsonResult(status);
       }
 
       default:
@@ -557,19 +514,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function shutdown() {
-  // 进程退出前关闭串口，防止资源泄漏
-  const closeJobs = [...openPorts.values()].map((state) => {
-    if (!state.serialPort?.isOpen) {
-      return Promise.resolve();
-    }
-
-    return new Promise((resolve) => {
-      state.serialPort.close(() => resolve());
-    });
-  });
-
-  await Promise.allSettled(closeJobs);
-
   // better-sqlite3 直接基于文件数据库，退出时关闭连接即可
   if (db) {
     try {
@@ -603,11 +547,6 @@ function initDatabase() {
       text TEXT,
       session_id TEXT
     )
-  `);
-
-  insertLogStmt = db.prepare(`
-    INSERT INTO serial_data (port, direction, raw, text, session_id, timestamp)
-    VALUES (@port, @direction, @raw, @text, @session_id, @timestamp)
   `);
 }
 

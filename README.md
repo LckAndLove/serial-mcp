@@ -74,21 +74,15 @@ cd ../serial-db && npm install
 cd ../serial-mcp && npm install
 ```
 
-### 3. 配置虚拟串口
+### 使用流程
 
-使用 ELTIMA VSP 或 com0com 创建一对虚拟串口：
-- COM2 — 模拟单片机端
-- COM3 — MCP 服务端
+1. 双击 `start-all.bat` 启动后台服务
+2. 打开 Claude Code 或 Codex CLI
+3. 告诉 AI 你的串口信息，例如：`我的 ESP32 接在 COM5，波特率 115200，帮我连接`
+4. AI 会自动调用 `connect_port` 完成连接
+5. 开始调试
 
-如需修改端口号，编辑各项目下的 `config.json`。
-
-### 4. 启动服务
-
-双击 `start-all.bat`，会自动弹出两个窗口：
-- 窗口1：虚拟单片机，每秒输出传感器数据
-- 窗口2：串口监听 + HTTP 服务
-
-### 5. 配置 Claude Code
+### 配置 Claude Code
 
 安装 Claude Code：
 ```bash
@@ -123,8 +117,8 @@ codex mcp list
 | 工具 | 说明 |
 |------|------|
 | `list_ports` | 扫描可用串口 |
-| `open_port` | 打开串口 |
-| `close_port` | 关闭串口 |
+| `connect_port` | 连接指定串口并创建新会话 |
+| `disconnect_port` | 断开当前串口 |
 | `send_data` | 发送数据 |
 | `read_latest` | 读取最新 N 条数据 |
 | `read_since` | 读取指定时间后的数据 |
