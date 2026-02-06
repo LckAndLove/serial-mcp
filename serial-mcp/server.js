@@ -178,6 +178,18 @@ function httpGet(urlText) {
       method: "GET",
     };
 
+    let settled = false;
+    const doneResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const doneReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     const req = http.request(options, (res) => {
       let data = "";
       res.on("data", chunk => { data += chunk; });
@@ -185,17 +197,21 @@ function httpGet(urlText) {
         try {
           const json = JSON.parse(data || "{}");
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(json);
+            doneResolve(json);
           } else {
-            reject(new Error(json.error || `HTTP ${res.statusCode}`));
+            doneReject(new Error(json.error || `HTTP ${res.statusCode}`));
           }
         } catch {
-          reject(new Error(`Invalid response: ${data}`));
+          doneReject(new Error(`Invalid response: ${data}`));
         }
       });
     });
 
-    req.on("error", reject);
+    req.setTimeout(5000, () => {
+      req.destroy(new Error("HTTP request timeout"));
+    });
+
+    req.on("error", doneReject);
     req.end();
   });
 }
@@ -372,6 +388,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send_data": {
+        const status = await httpGet(LISTENER_STATUS_URL);
+        if (!status.connected) {
+          return {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: "串口未连接，请先调用 connect_port",
+              }),
+            }],
+          };
+        }
+
         const data = String(args.data);
         const encoding = String(args.encoding || "text");
 
@@ -446,6 +476,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send_and_wait": {
+        const status = await httpGet(LISTENER_STATUS_URL);
+        if (!status.connected) {
+          return {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: "串口未连接，请先调用 connect_port",
+              }),
+            }],
+          };
+        }
+
         const data = String(args.data);
         const mode = String(args.mode || "timeout");
         const delimiter = typeof args.delimiter === "string" ? args.delimiter : "";

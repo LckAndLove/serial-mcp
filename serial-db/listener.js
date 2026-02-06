@@ -193,10 +193,6 @@ async function main() {
       throw new Error('parity 必须是 none/even/odd/mark/space');
     }
 
-    if (isConnected()) {
-      await disconnectCurrentPort();
-    }
-
     const nextPort = new SerialPort({
       path: port,
       baudRate,
@@ -206,9 +202,53 @@ async function main() {
       autoOpen: false,
     });
 
-    await new Promise((resolve, reject) => {
-      nextPort.open((err) => (err ? reject(err) : resolve()));
-    });
+    // 先尝试打开新串口，失败时不影响旧连接
+    try {
+      await new Promise((resolve, reject) => {
+        nextPort.open((err) => (err ? reject(err) : resolve()));
+      });
+    } catch (err) {
+      if (typeof nextPort.destroy === 'function') {
+        nextPort.destroy();
+      } else {
+        nextPort.removeAllListeners();
+      }
+      return { success: false, error: err.message || String(err) };
+    }
+
+    const prevPort = serialPort;
+    const prevDataHandler = dataHandler;
+    const prevErrorHandler = errorHandler;
+    const prevCloseHandler = closeHandler;
+
+    // 新串口打开成功后再断旧串口
+    try {
+      if (prevPort) {
+        if (prevDataHandler) prevPort.off('data', prevDataHandler);
+        if (prevErrorHandler) prevPort.off('error', prevErrorHandler);
+        if (prevCloseHandler) prevPort.off('close', prevCloseHandler);
+        if (prevPort.isOpen) {
+          await new Promise((resolve, reject) => {
+            prevPort.close((err) => (err ? reject(err) : resolve()));
+          });
+        }
+      }
+    } catch (err) {
+      // 旧串口断开失败：回滚并保持旧连接在线
+      if (prevPort?.isOpen) {
+        if (prevDataHandler) prevPort.on('data', prevDataHandler);
+        if (prevErrorHandler) prevPort.on('error', prevErrorHandler);
+        if (prevCloseHandler) prevPort.on('close', prevCloseHandler);
+      }
+      if (nextPort.isOpen) {
+        await new Promise((resolve) => {
+          nextPort.close(() => resolve());
+        });
+      } else if (typeof nextPort.destroy === 'function') {
+        nextPort.destroy();
+      }
+      return { success: false, error: err.message || String(err) };
+    }
 
     serialPort = nextPort;
     currentPort = port;
