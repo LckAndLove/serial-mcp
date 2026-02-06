@@ -22,11 +22,13 @@ function readJsonBody(req, res) {
     const MAX_BODY_SIZE = 1024 * 1024;
     let body = '';
     let settled = false;
+
     const doneResolve = (value) => {
       if (settled) return;
       settled = true;
       resolve(value);
     };
+
     const doneReject = (error) => {
       if (settled) return;
       settled = true;
@@ -44,6 +46,7 @@ function readJsonBody(req, res) {
         doneResolve(null);
       }
     });
+
     req.on('end', () => {
       if (settled) return;
       try {
@@ -52,6 +55,7 @@ function readJsonBody(req, res) {
         doneReject(err);
       }
     });
+
     req.on('error', doneReject);
   });
 }
@@ -78,65 +82,57 @@ async function main() {
     return;
   }
 
-  // 实例化数据库
   const serialDb = new SerialDB(dbPath);
 
-  let activeSessionId = serialDb.newSession();
-  let serialPort = null;
-  let currentPort = null;
-  let currentBaudRate = null;
-  let dataHandler = null;
-  let errorHandler = null;
-  let closeHandler = null;
-  let buffer = '';
+  // key: portName, value: { port: SerialPort, sessionId, baudRate, buffer, ...handlers }
+  const connectedPorts = new Map();
 
-  function isConnected() {
-    return Boolean(serialPort?.isOpen);
+  function getStatus() {
+    const ports = [...connectedPorts.entries()].map(([portName, state]) => ({
+      port: portName,
+      baudRate: state.baudRate,
+      sessionId: state.sessionId,
+    }));
+
+    return {
+      connected: ports.length > 0,
+      ports,
+    };
   }
 
-  function detachPortHandlers() {
-    if (!serialPort) return;
-    if (dataHandler) serialPort.off('data', dataHandler);
-    if (errorHandler) serialPort.off('error', errorHandler);
-    if (closeHandler) serialPort.off('close', closeHandler);
-    dataHandler = null;
-    errorHandler = null;
-    closeHandler = null;
-  }
+  async function closePortState(portName) {
+    const state = connectedPorts.get(portName);
+    if (!state) return false;
 
-  async function disconnectCurrentPort() {
-    if (!serialPort) {
-      currentPort = null;
-      currentBaudRate = null;
-      return;
-    }
+    const serialPort = state.port;
 
-    const target = serialPort;
-    detachPortHandlers();
+    if (state.dataHandler) serialPort.off('data', state.dataHandler);
+    if (state.errorHandler) serialPort.off('error', state.errorHandler);
+    if (state.closeHandler) serialPort.off('close', state.closeHandler);
 
-    if (target.isOpen) {
+    connectedPorts.delete(portName);
+
+    if (serialPort.isOpen) {
       await new Promise((resolve, reject) => {
-        target.close((err) => (err ? reject(err) : resolve()));
+        serialPort.close((err) => (err ? reject(err) : resolve()));
       });
     }
 
-    serialPort = null;
-    currentPort = null;
-    currentBaudRate = null;
-    buffer = '';
+    return true;
   }
 
-  function installPortHandlers(portName) {
-    dataHandler = (chunk) => {
-      buffer += chunk.toString('utf8');
+  function attachHandlers(portName, state) {
+    const serialPort = state.port;
 
-      const parts = buffer.split(delimiter);
-      buffer = parts.pop() || '';
+    state.dataHandler = (chunk) => {
+      state.buffer += chunk.toString('utf8');
+
+      const parts = state.buffer.split(delimiter);
+      state.buffer = parts.pop() || '';
 
       for (const item of parts) {
         const raw = item;
-        const ts = formatTimestamp();
-        console.log(`[${ts}] ${raw}`);
+        console.log(`[${formatTimestamp()}] [${portName}] ${raw}`);
 
         try {
           serialDb.insertRow({
@@ -145,36 +141,34 @@ async function main() {
             direction: 'rx',
             raw: Buffer.from(raw, 'utf8'),
             text: raw,
-            session_id: activeSessionId,
+            session_id: state.sessionId,
           });
         } catch (err) {
-          console.error(`[${formatTimestamp()}] 写库失败:`, err.message || err);
+          console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
         }
       }
     };
 
-    errorHandler = (err) => {
-      console.error(`[${formatTimestamp()}] 串口错误:`, err.message || err);
+    state.errorHandler = (err) => {
+      console.error(`[${formatTimestamp()}] [${portName}] 串口错误:`, err.message || err);
     };
 
-    closeHandler = () => {
-      if (serialPort) {
-        console.log(`[${formatTimestamp()}] 串口已断开: ${currentPort || portName}`);
+    state.closeHandler = () => {
+      const current = connectedPorts.get(portName);
+      if (current && current.port === serialPort) {
+        connectedPorts.delete(portName);
       }
-      serialPort = null;
-      currentPort = null;
-      currentBaudRate = null;
-      buffer = '';
+      console.log(`[${formatTimestamp()}] [${portName}] 串口已断开`);
     };
 
-    serialPort.on('data', dataHandler);
-    serialPort.on('error', errorHandler);
-    serialPort.on('close', closeHandler);
+    serialPort.on('data', state.dataHandler);
+    serialPort.on('error', state.errorHandler);
+    serialPort.on('close', state.closeHandler);
   }
 
   async function connectPort(options) {
-    const port = typeof options.port === 'string' ? options.port.trim() : '';
-    if (!port) {
+    const portName = typeof options.port === 'string' ? options.port.trim() : '';
+    if (!portName) {
       throw new Error('port is required');
     }
 
@@ -193,8 +187,8 @@ async function main() {
       throw new Error('parity 必须是 none/even/odd/mark/space');
     }
 
-    const nextPort = new SerialPort({
-      path: port,
+    const serialPort = new SerialPort({
+      path: portName,
       baudRate,
       dataBits,
       stopBits,
@@ -202,74 +196,41 @@ async function main() {
       autoOpen: false,
     });
 
-    // 先尝试打开新串口，失败时不影响旧连接
-    try {
-      await new Promise((resolve, reject) => {
-        nextPort.open((err) => (err ? reject(err) : resolve()));
-      });
-    } catch (err) {
-      if (typeof nextPort.destroy === 'function') {
-        nextPort.destroy();
-      } else {
-        nextPort.removeAllListeners();
-      }
-      return { success: false, error: err.message || String(err) };
+    await new Promise((resolve, reject) => {
+      serialPort.open((err) => (err ? reject(err) : resolve()));
+    });
+
+    if (connectedPorts.has(portName)) {
+      await closePortState(portName);
     }
 
-    const prevPort = serialPort;
-    const prevDataHandler = dataHandler;
-    const prevErrorHandler = errorHandler;
-    const prevCloseHandler = closeHandler;
+    const state = {
+      port: serialPort,
+      sessionId: serialDb.newSession(),
+      baudRate,
+      dataBits,
+      stopBits,
+      parity,
+      buffer: '',
+      dataHandler: null,
+      errorHandler: null,
+      closeHandler: null,
+    };
 
-    // 新串口打开成功后再断旧串口
-    try {
-      if (prevPort) {
-        if (prevDataHandler) prevPort.off('data', prevDataHandler);
-        if (prevErrorHandler) prevPort.off('error', prevErrorHandler);
-        if (prevCloseHandler) prevPort.off('close', prevCloseHandler);
-        if (prevPort.isOpen) {
-          await new Promise((resolve, reject) => {
-            prevPort.close((err) => (err ? reject(err) : resolve()));
-          });
-        }
-      }
-    } catch (err) {
-      // 旧串口断开失败：回滚并保持旧连接在线
-      if (prevPort?.isOpen) {
-        if (prevDataHandler) prevPort.on('data', prevDataHandler);
-        if (prevErrorHandler) prevPort.on('error', prevErrorHandler);
-        if (prevCloseHandler) prevPort.on('close', prevCloseHandler);
-      }
-      if (nextPort.isOpen) {
-        await new Promise((resolve) => {
-          nextPort.close(() => resolve());
-        });
-      } else if (typeof nextPort.destroy === 'function') {
-        nextPort.destroy();
-      }
-      return { success: false, error: err.message || String(err) };
-    }
+    attachHandlers(portName, state);
+    connectedPorts.set(portName, state);
 
-    serialPort = nextPort;
-    currentPort = port;
-    currentBaudRate = baudRate;
-    activeSessionId = serialDb.newSession();
-    buffer = '';
-
-    installPortHandlers(port);
-    console.log(`[${formatTimestamp()}] 串口已连接: ${port} @ ${baudRate}, session: ${activeSessionId}`);
+    console.log(`[${formatTimestamp()}] 串口已连接: ${portName} @ ${baudRate}, session: ${state.sessionId}`);
 
     return {
       success: true,
-      port,
+      port: portName,
       baudRate,
-      sessionId: activeSessionId,
+      sessionId: state.sessionId,
     };
   }
 
-  // HTTP 服务：转发指令到串口
   const httpServer = http.createServer(async (req, res) => {
-    // CORS 头
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -292,90 +253,119 @@ async function main() {
         return;
       }
 
-      // POST /disconnect
+      // POST /disconnect { port }
       if (req.method === 'POST' && url.pathname === '/disconnect') {
-        await disconnectCurrentPort();
-        sendJson(res, 200, { success: true });
+        const payload = await readJsonBody(req, res);
+        if (payload === null) return;
+
+        const portName = typeof payload.port === 'string' ? payload.port.trim() : '';
+        if (!portName) {
+          sendJson(res, 400, { success: false, error: 'port is required' });
+          return;
+        }
+
+        const existed = await closePortState(portName);
+        if (!existed) {
+          sendJson(res, 404, { success: false, error: '端口未连接' });
+          return;
+        }
+
+        sendJson(res, 200, { success: true, port: portName });
         return;
       }
 
-      // POST /send
+      // POST /send { port, data, encoding, session_id }
       if (req.method === 'POST' && url.pathname === '/send') {
-        if (!isConnected()) {
-          sendJson(res, 409, { error: 'serial port is not connected' });
+        const payload = await readJsonBody(req, res);
+        if (payload === null) return;
+
+        const portName = typeof payload.port === 'string' ? payload.port.trim() : '';
+        const data = payload.data;
+        const encoding = typeof payload.encoding === 'string' ? payload.encoding : 'text';
+        const sessionIdInput = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
+
+        if (!portName) {
+          sendJson(res, 400, { success: false, error: 'port is required' });
           return;
         }
-
-        const requestBody = await readJsonBody(req, res);
-        if (requestBody === null) return;
-        const { data, encoding = 'text', session_id } = requestBody;
         if (!data) {
-          sendJson(res, 400, { error: 'data is required' });
+          sendJson(res, 400, { success: false, error: 'data is required' });
           return;
         }
 
-        const escaped = data.replace(/\\r/g, '\r').replace(/\\n/g, '\n');
-        const effectiveSessionId =
-          typeof session_id === 'string' && session_id.trim()
-            ? session_id.trim()
-            : activeSessionId;
+        const state = connectedPorts.get(portName);
+        if (!state || !state.port?.isOpen) {
+          sendJson(res, 404, { success: false, error: '端口未连接' });
+          return;
+        }
+
+        const escaped = String(data).replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+        const effectiveSessionId = sessionIdInput || state.sessionId;
 
         const serialPayload = encoding === 'hex'
           ? Buffer.from(escaped.replace(/0x/gi, ''), 'hex')
           : Buffer.from(escaped, 'utf8');
 
-        serialPort.write(serialPayload, (err) => {
+        state.port.write(serialPayload, (err) => {
           if (err) {
-            sendJson(res, 500, { error: err.message });
+            sendJson(res, 500, { success: false, error: err.message });
             return;
           }
 
-          serialPort.drain(() => {
+          state.port.drain(() => {
             try {
-                serialDb.insertRow({
-                  port: currentPort,
-                  timestamp: Date.now(),
-                  direction: 'tx',
-                  raw: serialPayload,
-                  text: serialPayload.toString('utf8'),
-                  session_id: effectiveSessionId,
-                });
+              serialDb.insertRow({
+                port: portName,
+                timestamp: Date.now(),
+                direction: 'tx',
+                raw: serialPayload,
+                text: serialPayload.toString('utf8'),
+                session_id: effectiveSessionId,
+              });
             } catch (dbErr) {
-              console.error(`[${formatTimestamp()}] HTTP /send 写库失败:`, dbErr.message || dbErr);
+              console.error(`[${formatTimestamp()}] [${portName}] HTTP /send 写库失败:`, dbErr.message || dbErr);
             }
 
-            sendJson(res, 200, { success: true, bytesSent: serialPayload.length });
+            sendJson(res, 200, { success: true, bytesSent: serialPayload.length, port: portName });
           });
         });
+
         return;
       }
 
-      // POST /session
+      // POST /session { port, session_id }
       if (req.method === 'POST' && url.pathname === '/session') {
         const payload = await readJsonBody(req, res);
         if (payload === null) return;
-        const nextSessionId =
-          typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
 
-        if (!nextSessionId) {
-          sendJson(res, 400, { error: 'session_id is required' });
+        const portName = typeof payload.port === 'string' ? payload.port.trim() : '';
+        const nextSessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
+
+        if (!portName) {
+          sendJson(res, 400, { success: false, error: 'port is required' });
           return;
         }
 
-        activeSessionId = nextSessionId;
-        console.log(`[${formatTimestamp()}] session 切换: ${activeSessionId}`);
-        sendJson(res, 200, { success: true, session_id: activeSessionId });
+        if (!nextSessionId) {
+          sendJson(res, 400, { success: false, error: 'session_id is required' });
+          return;
+        }
+
+        const state = connectedPorts.get(portName);
+        if (!state) {
+          sendJson(res, 404, { success: false, error: '端口未连接' });
+          return;
+        }
+
+        state.sessionId = nextSessionId;
+        console.log(`[${formatTimestamp()}] [${portName}] session 切换: ${state.sessionId}`);
+        sendJson(res, 200, { success: true, port: portName, session_id: state.sessionId });
         return;
       }
 
       // GET /status
       if (req.method === 'GET' && url.pathname === '/status') {
-        sendJson(res, 200, {
-          connected: isConnected(),
-          port: currentPort,
-          baudRate: currentBaudRate,
-          sessionId: activeSessionId,
-        });
+        sendJson(res, 200, getStatus());
         return;
       }
 
@@ -398,7 +388,6 @@ async function main() {
     console.log(`[${formatTimestamp()}] HTTP 服务已启动: http://127.0.0.1:${HTTP_PORT}，等待连接串口...`);
   });
 
-  // 定时执行 cleanup()
   setInterval(() => {
     try {
       const deleted = serialDb.cleanup(maxRows);
