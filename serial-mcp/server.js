@@ -56,7 +56,7 @@ function logToFile(...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] ${msg}`;
-  fs.appendFileSync(LOG_FILE, line + "\n");
+  fs.appendFile(LOG_FILE, line + "\n", () => {});
 }
 
 // 封装错误日志写入，同时输出到控制台和日志文件
@@ -64,7 +64,7 @@ function logErrorToFile(...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] ${msg}`;
-  fs.appendFileSync(LOG_FILE, line + "\n");
+  fs.appendFile(LOG_FILE, line + "\n", () => {});
 }
 
 // 替换 console.log 和 console.error，使其同时写入日志文件
@@ -464,20 +464,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           session_id: activeSessionId,
         });
 
+        // t1: 发送完成时刻，轮询只关注这之后的数据
+        let t1 = Date.now();
         let response = "";
+        const stmt = db.prepare(
+          "SELECT id, text, timestamp FROM serial_data WHERE direction='rx' AND timestamp > ? AND session_id = ? ORDER BY id ASC LIMIT 1"
+        );
+
         while (Date.now() - t0 < timeout) {
           await sleep(100);
-          const row =
-            mode === "delimiter"
-              ? db.prepare(
-                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? AND session_id = ? AND text LIKE ? ORDER BY id ASC LIMIT 1"
-              ).get(t0, activeSessionId, `%${delimiter}%`)
-              : db.prepare(
-                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? AND session_id = ? ORDER BY id ASC LIMIT 1"
-              ).get(t0, activeSessionId);
+          const row = stmt.get(t1, activeSessionId);
 
           if (row) {
-            response = row.text || "";
+            const text = row.text || "";
+            if (mode === "delimiter") {
+              if (text.includes(delimiter)) {
+                response = text;
+                break;
+              }
+              t1 = Number(row.timestamp) || t1;
+              continue;
+            }
+
+            response = text;
             break;
           }
         }
