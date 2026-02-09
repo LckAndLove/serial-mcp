@@ -79,6 +79,7 @@ console.error = (...args) => { originalConsoleError(...args); logErrorToFile(...
 
 // 按端口维护会话：port -> sessionId
 const sessionMap = new Map();
+let portSnapshot = null;
 
 // 数据库相关状态（better-sqlite3 为同步初始化）
 let db = null;
@@ -348,6 +349,20 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "detect_device",
+    description: "扫描新插入的串口设备。\n使用方式：\n1. 插板子之前调用一次 detect_device(action='snapshot')，记录当前串口列表\n2. 插上板子\n3. 再调用一次 detect_device(action='detect')，自动找出新增的串口\n4. 发现新设备后可直接调用 connect_port 连接",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["snapshot", "detect"] },
+        auto_connect: { type: "boolean" },
+        baudRate: { type: "integer", minimum: 1 },
+      },
+      required: ["action"],
       additionalProperties: false,
     },
   },
@@ -641,6 +656,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "get_status": {
         const status = await httpGet(LISTENER_STATUS_URL);
         return jsonResult(status);
+      }
+
+      case "detect_device": {
+        const action = String(args.action);
+        const autoConnect = Boolean(args.auto_connect || false);
+        const baudRate = Number(args.baudRate || 115200);
+        const ports = await SerialPort.list();
+        const allPorts = ports.map((item) => ({
+          name: item.friendlyName ?? item.path,
+          path: item.path,
+          manufacturer: item.manufacturer ?? null,
+        }));
+
+        if (action === "snapshot") {
+          portSnapshot = allPorts.map((item) => item.path);
+          return jsonResult({
+            success: true,
+            action: "snapshot",
+            ports: allPorts,
+            message: "已记录当前串口状态，请插入设备后调用 detect",
+          });
+        }
+
+        if (action === "detect") {
+          if (!Array.isArray(portSnapshot)) {
+            return jsonResult({
+              success: true,
+              action: "detect",
+              newPorts: [],
+              allPorts,
+              message: "未找到历史快照，已返回当前串口列表",
+            });
+          }
+
+          const previous = new Set(portSnapshot);
+          const newPorts = allPorts.filter((item) => !previous.has(item.path));
+
+          const result = {
+            success: true,
+            action: "detect",
+            newPorts,
+            allPorts,
+            message: newPorts.length > 0
+              ? `发现新设备：${newPorts.map((item) => item.path).join(", ")}`
+              : "未发现新设备",
+          };
+
+          if (autoConnect && newPorts.length > 0) {
+            const targetPort = newPorts[0].path;
+            const connected = await httpPost(LISTENER_CONNECT_URL, {
+              port: targetPort,
+              baudRate,
+              dataBits: 8,
+              stopBits: 1,
+              parity: "none",
+            });
+
+            if (connected?.sessionId) {
+              sessionMap.set(targetPort, String(connected.sessionId));
+              result.connected = true;
+              result.sessionId = String(connected.sessionId);
+              result.port = targetPort;
+            } else {
+              result.connected = false;
+            }
+          }
+
+          return jsonResult(result);
+        }
+
+        throw new Error("action 必须是 snapshot 或 detect");
       }
 
       default:
