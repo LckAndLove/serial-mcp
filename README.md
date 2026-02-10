@@ -76,11 +76,11 @@ cd ../serial-mcp && npm install
 
 ### 使用流程
 
-1. 双击 `start-all.bat` 启动后台服务
-2. 打开 Claude Code 或 Codex CLI
-3. 告诉 AI 你的串口信息，例如：`我的 ESP32 接在 COM5，波特率 115200，帮我连接`
-4. AI 会自动调用 `connect_port` 完成连接
-5. 开始调试
+1. 真实硬件用户：直接打开 Claude Code 即可，MCP Server 会自动启动后台服务
+2. 虚拟设备用户：双击 `start-all.bat` 启动虚拟单片机，再打开 Claude Code
+3. 告诉 AI 你的设备串口信息，开始调试
+
+无需手动启动任何其他服务。
 
 ### 配置 Claude Code
 
