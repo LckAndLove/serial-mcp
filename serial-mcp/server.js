@@ -809,12 +809,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : null;
         const baudRate = Number(args.baudRate || 115200);
         const monitorWindowPath = path.resolve(__dirname, "monitor-window.js");
-        const quotedScript = `"${monitorWindowPath}"`;
-        const portArg = port ? ` "${port}"` : "";
-        const command = `node ${quotedScript}${portArg}`;
+        const command = `node "${monitorWindowPath}" ${port || ""}`;
 
         spawn("cmd.exe", [
-          "/c", "start", "串口监控",
+          "/c", "start", "\"\"",
           "cmd", "/k", command,
         ], {
           detached: true,
