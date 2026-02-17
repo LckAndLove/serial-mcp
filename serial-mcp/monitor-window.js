@@ -35,6 +35,7 @@ const query = db.prepare(`
 const RESET = "\x1b[0m";
 const YELLOW = "\x1b[33m";
 const GREEN = "\x1b[32m";
+const CYAN = "\x1b[36m";
 const RED = "\x1b[31m";
 
 const rl = readline.createInterface({
@@ -55,7 +56,8 @@ function formatTime(ms) {
 function printColored(direction, port, text, timestamp = Date.now()) {
   const isTx = direction === "tx";
   const prefix = isTx ? "→" : "←";
-  const color = isTx ? YELLOW : GREEN;
+  const isHexRx = !isTx && typeof text === "string" && text.startsWith("[HEX]");
+  const color = isTx ? YELLOW : (isHexRx ? CYAN : GREEN);
   const line = `[${formatTime(timestamp)}] [${port}] ${prefix} ${text}`;
   process.stdout.write(`${color}${line}${RESET}\n`);
 }

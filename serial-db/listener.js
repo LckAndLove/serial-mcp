@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { SerialPort } = require('serialport');
-const { ReadlineParser } = require('@serialport/parser-readline');
 const lockFile = path.resolve(__dirname, 'listener.lock');
 
 // 读取同目录配置文件
@@ -102,8 +101,28 @@ async function main() {
 
   const serialDb = new SerialDB(dbPath);
 
-  // key: portName, value: { port: SerialPort, parser, sessionId, baudRate, ...handlers }
+  // key: portName, value: { port: SerialPort, sessionId, baudRate, rxBuffer, ...handlers }
   const connectedPorts = new Map();
+  const delimiterBuffer = Buffer.from(delimiter, 'utf8');
+  const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+
+  function formatHex(buffer) {
+    return `[HEX] ${buffer.toString('hex').toUpperCase().match(/.{1,2}/g).join(' ')}`;
+  }
+
+  function decodeFrame(buffer) {
+    if (!buffer.length) return '';
+
+    try {
+      const decoded = utf8Decoder.decode(buffer);
+      if (decoded.includes('\uFFFD')) {
+        return formatHex(buffer);
+      }
+      return decoded;
+    } catch {
+      return formatHex(buffer);
+    }
+  }
 
   function getStatus() {
     const ports = [...connectedPorts.entries()].map(([portName, state]) => ({
@@ -123,9 +142,8 @@ async function main() {
     if (!state) return false;
 
     const serialPort = state.port;
-    const parser = state.parser;
 
-    if (state.dataHandler && parser) parser.off('data', state.dataHandler);
+    if (state.dataHandler) serialPort.off('data', state.dataHandler);
     if (state.errorHandler) serialPort.off('error', state.errorHandler);
     if (state.closeHandler) serialPort.off('close', state.closeHandler);
 
@@ -142,23 +160,31 @@ async function main() {
 
   function attachHandlers(portName, state) {
     const serialPort = state.port;
-    const parser = state.parser;
 
-    state.dataHandler = (line) => {
-      const raw = String(line);
-      console.log(`[${formatTimestamp()}] [${portName}] ${raw}`);
+    state.dataHandler = (chunk) => {
+      const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      state.rxBuffer = Buffer.concat([state.rxBuffer, chunkBuffer]);
 
-      try {
-        serialDb.insertRow({
-          port: portName,
-          timestamp: Date.now(),
-          direction: 'rx',
-          raw: Buffer.from(raw, 'utf8'),
-          text: raw,
-          session_id: state.sessionId,
-        });
-      } catch (err) {
-        console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
+      let idx;
+      while ((idx = state.rxBuffer.indexOf(delimiterBuffer)) !== -1) {
+        const frame = state.rxBuffer.slice(0, idx);
+        state.rxBuffer = state.rxBuffer.slice(idx + delimiterBuffer.length);
+
+        const text = decodeFrame(frame);
+        console.log(`[${formatTimestamp()}] [${portName}] ${text}`);
+
+        try {
+          serialDb.insertRow({
+            port: portName,
+            timestamp: Date.now(),
+            direction: 'rx',
+            raw: frame,
+            text,
+            session_id: state.sessionId,
+          });
+        } catch (err) {
+          console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
+        }
       }
     };
 
@@ -174,7 +200,7 @@ async function main() {
       console.log(`[${formatTimestamp()}] [${portName}] 串口已断开`);
     };
 
-    parser.on('data', state.dataHandler);
+    serialPort.on('data', state.dataHandler);
     serialPort.on('error', state.errorHandler);
     serialPort.on('close', state.closeHandler);
   }
@@ -217,16 +243,14 @@ async function main() {
       await closePortState(portName);
     }
 
-    const parser = serialPort.pipe(new ReadlineParser({ delimiter }));
-
     const state = {
       port: serialPort,
-      parser,
       sessionId: serialDb.newSession(),
       baudRate,
       dataBits,
       stopBits,
       parity,
+      rxBuffer: Buffer.alloc(0),
       dataHandler: null,
       errorHandler: null,
       closeHandler: null,
