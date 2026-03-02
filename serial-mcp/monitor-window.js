@@ -5,220 +5,195 @@ import http from 'http';
 import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const port = process.argv[2] || 'COM3';
+const port = process.argv[2] || 'COM12';
 const baudRate = process.argv[3] || '115200';
 
 const COMMANDS = [
   { cmd: '/text', desc: '切换文本模式' },
   { cmd: '/hex', desc: '切换 HEX 模式' },
-  { cmd: '/timer', desc: '定时发送  /timer <ms> <data>' },
-  { cmd: '/timers', desc: '查看定时任务列表' },
-  { cmd: '/stop', desc: '停止定时任务  /stop <id|all>' },
+  { cmd: '/timer', desc: '定时发送  用法: /timer <ms> <data>' },
+  { cmd: '/timers', desc: '查看所有定时任务' },
+  { cmd: '/stop', desc: '停止定时任务  用法: /stop <id|all>' },
   { cmd: '/clear', desc: '清空日志区' },
-  { cmd: '/help', desc: '显示帮助' },
-  { cmd: '/exit', desc: '退出监控' }
+  { cmd: '/help', desc: '显示帮助信息' },
+  { cmd: '/exit', desc: '退出监控窗口' }
 ];
 
 const INPUT_HEIGHT = 3;
-const MAX_HINT_ROWS = 8;
+const MAX_HINT_ITEMS = 8;
+
 let currentMode = 'text';
-let matchedCommands = [];
+let lastId = 0;
+let exiting = false;
+let pollHandle = null;
 
 const timers = new Map();
 let nextTimerId = 1;
-let lastId = 0;
+let currentHints = [];
 
 const screen = blessed.screen({
   smartCSR: true,
-  fullUnicode: true,
   title: `串口监控 ${port}`,
-  dockBorders: true,
-  autoPadding: false
+  fullUnicode: true,
+  dockBorders: true
 });
 
 const logBox = blessed.log({
-  parent: screen,
   top: 0,
   left: 0,
   width: '100%',
-  height: `100%-${INPUT_HEIGHT}`,
-  border: 'line',
-  label: ` 串口监控  ${port}  |  ${baudRate} baud `,
+  height: screen.height - INPUT_HEIGHT,
+  label: `  串口监控  ${port}  │  ${baudRate} baud  `,
   tags: true,
   scrollable: true,
   alwaysScroll: true,
-  keys: true,
-  vi: true,
+  scrollbar: { ch: '█', style: { fg: 'gray' } },
   mouse: true,
-  scrollbar: {
-    ch: ' ',
-    track: { bg: 'black' },
-    style: { bg: 'gray' }
-  },
+  border: { type: 'line' },
   style: {
     border: { fg: 'gray' },
     label: { fg: 'cyan', bold: true }
   }
 });
 
+const inputBox = blessed.textbox({
+  bottom: 0,
+  left: 0,
+  width: '100%',
+  height: INPUT_HEIGHT,
+  label: `  ${port}  [text] ❯  `,
+  tags: true,
+  inputOnFocus: true,
+  border: { type: 'line' },
+  style: {
+    border: { fg: 'cyan' },
+    label: { fg: 'green', bold: true },
+    focus: { border: { fg: 'white' } }
+  }
+});
+
 const hintBox = blessed.list({
-  parent: screen,
   bottom: 0,
   left: 0,
   width: '100%',
   height: 0,
   hidden: true,
-  border: 'line',
   tags: true,
   keys: true,
   mouse: true,
-  interactive: true,
+  border: { type: 'line' },
   style: {
     border: { fg: 'gray' },
     selected: { bg: 'blue', fg: 'white', bold: true },
-    item: { fg: 'white' }
-  }
+    item: { fg: 'white' },
+    label: { fg: 'gray' }
+  },
+  label: '  命令  '
 });
 
-const inputBox = blessed.textbox({
-  parent: screen,
-  bottom: 0,
-  left: 0,
-  width: '100%',
-  height: INPUT_HEIGHT,
-  border: 'line',
-  label: ` ${port}  [${currentMode}] `,
-  inputOnFocus: true,
-  keys: true,
-  mouse: true,
-  style: {
-    border: { fg: 'cyan' },
-    focus: { border: { fg: 'white' } },
-    label: { fg: 'green' }
-  }
-});
+function escapeTags(text) {
+  return String(text ?? '').replace(/[{}]/g, (ch) => (ch === '{' ? '\\{' : '\\}'));
+}
 
-function refreshLayout() {
-  const hintHeight = hintBox.hidden ? 0 : hintBox.height;
-  hintBox.bottom = 0;
-  inputBox.bottom = hintHeight;
-  logBox.top = 0;
-  logBox.height = screen.height - INPUT_HEIGHT - hintHeight;
+function getTimestamp(ts) {
+  const d = new Date(ts);
+  const hhmmss = d.toTimeString().slice(0, 8);
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${hhmmss}.${ms}`;
+}
+
+function applyLayout() {
+  if (hintBox.hidden) {
+    hintBox.height = 0;
+    inputBox.bottom = 0;
+    logBox.height = screen.height - INPUT_HEIGHT;
+  } else {
+    inputBox.bottom = hintBox.height;
+    logBox.height = screen.height - INPUT_HEIGHT - hintBox.height;
+  }
   screen.render();
 }
 
-function setModeLabel() {
-  inputBox.setLabel(` ${port}  [${currentMode}] `);
+function showHint(matched) {
+  currentHints = matched;
+  const items = matched.map((c) =>
+    `{green-fg}${c.cmd.padEnd(10)}{/green-fg}  {gray-fg}${c.desc}{/gray-fg}`
+  );
+
+  hintBox.setItems(items);
+  const h = Math.min(matched.length, MAX_HINT_ITEMS) + 2;
+  hintBox.height = h;
+  hintBox.bottom = 0;
+  hintBox.hidden = false;
+  hintBox.select(0);
+
+  inputBox.bottom = h;
+  logBox.height = screen.height - INPUT_HEIGHT - h;
+  screen.render();
 }
 
 function hideHint() {
-  matchedCommands = [];
+  currentHints = [];
   hintBox.hidden = true;
   hintBox.height = 0;
-  hintBox.clearItems();
-  refreshLayout();
-}
-
-function showHint(input) {
-  const matched = input === '/'
-    ? COMMANDS
-    : COMMANDS.filter((item) => item.cmd.startsWith(input));
-
-  if (!matched.length) {
-    hideHint();
-    return;
-  }
-
-  matchedCommands = matched;
-  const items = matched.map((item) => {
-    const padCmd = item.cmd.padEnd(12, ' ');
-    return `{green-fg}${padCmd}{/green-fg}  {gray-fg}${item.desc}{/gray-fg}`;
-  });
-
-  hintBox.setItems(items);
-  hintBox.select(0);
-  hintBox.hidden = false;
-  hintBox.height = Math.min(matched.length, MAX_HINT_ROWS) + 2;
-  refreshLayout();
-}
-
-function formatTime(timestamp) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return '00:00:00.000';
-  }
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mm = String(date.getMinutes()).padStart(2, '0');
-  const ss = String(date.getSeconds()).padStart(2, '0');
-  const ms = String(date.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
-}
-
-function escapeTags(value) {
-  return String(value ?? '').replace(/[{}]/g, (ch) => (ch === '{' ? '\\{' : '\\}'));
-}
-
-function appendLog(entry) {
-  const time = formatTime(entry.timestamp);
-  const text = escapeTags(entry.text);
-
-  let line;
-  if (entry.direction === 'tx') {
-    line = `{gray-fg}${time}{/gray-fg}  {yellow-fg}▶{/yellow-fg}  {white-fg}${text}{/white-fg}`;
-  } else {
-    const isHex = text.startsWith('[HEX]');
-    const color = isHex ? 'cyan' : 'green';
-    line = `{gray-fg}${time}{/gray-fg}  {${color}-fg}◀{/${color}-fg}  {${color}-fg}${text}{/${color}-fg}`;
-  }
-
-  logBox.log(line);
+  inputBox.bottom = 0;
+  logBox.height = screen.height - INPUT_HEIGHT;
   screen.render();
 }
 
-function appendSystemLog(line, color = 'gray') {
-  logBox.log(`{${color}-fg}${escapeTags(line)}{/${color}-fg}`);
+function appendLog(entry) {
+  const time = getTimestamp(entry.timestamp);
+  const text = escapeTags(entry.text);
+
+  if (entry.direction === 'tx') {
+    logBox.log(`{gray-fg}${time}{/gray-fg}  {yellow-fg}▶{/yellow-fg}  {white-fg}${text}{/white-fg}`);
+  } else {
+    const isHex = text.startsWith('[HEX]');
+    const color = isHex ? 'cyan' : 'green';
+    logBox.log(`{gray-fg}${time}{/gray-fg}  {${color}-fg}◀{/${color}-fg}  {${color}-fg}${text}{/${color}-fg}`);
+  }
   screen.render();
 }
 
 function sendToPort(data, encoding) {
   const body = JSON.stringify({ port, data, encoding });
-
-  const req = http.request(
-    {
-      hostname: '127.0.0.1',
-      port: 7070,
-      path: '/send',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body)
-      },
-      timeout: 5000
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port: 7070,
+    path: '/send',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
     },
-    (res) => {
-      let raw = '';
-      res.on('data', (chunk) => {
-        raw += chunk;
-      });
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(raw);
-          if (!result.success) {
-            appendSystemLog(`✗ 发送失败：${result.error || '未知错误'}`, 'red');
-          }
-        } catch {
-          // ignore invalid payload
+    timeout: 5000
+  }, (res) => {
+    let raw = '';
+    res.on('data', (d) => {
+      raw += d;
+    });
+    res.on('end', () => {
+      try {
+        const r = JSON.parse(raw);
+        if (!r.success) {
+          logBox.log(`{red-fg}✗ 发送失败：${escapeTags(r.error || '未知错误')}{/red-fg}`);
+          screen.render();
         }
-      });
-    }
-  );
-
-  req.on('timeout', () => {
-    req.destroy(new Error('请求超时'));
+      } catch {
+        // ignore parse error
+      }
+    });
   });
 
-  req.on('error', (err) => {
-    appendSystemLog(`✗ 连接失败：${err.message}`, 'red');
+  req.on('error', (e) => {
+    logBox.log(`{red-fg}✗ 连接失败：${escapeTags(e.message)}{/red-fg}`);
+    screen.render();
+  });
+
+  req.on('timeout', () => {
+    req.destroy();
+    logBox.log('{red-fg}✗ 发送超时{/red-fg}');
+    screen.render();
   });
 
   req.write(body);
@@ -226,260 +201,246 @@ function sendToPort(data, encoding) {
 }
 
 function addTimer(ms, data, encoding) {
-  const id = nextTimerId;
-  nextTimerId += 1;
-
-  const handle = setInterval(() => {
-    sendToPort(data, encoding);
-  }, ms);
-
+  const id = nextTimerId++;
+  const handle = setInterval(() => sendToPort(data, encoding), ms);
   timers.set(id, { ms, data, encoding, handle });
-  appendSystemLog(`── 定时任务 [${id}] 已启动，每 ${ms}ms 发送 ──`, 'gray');
+  logBox.log(`{gray-fg}── 定时任务 [${id}] 已启动，每 ${ms}ms 发送 ──{/gray-fg}`);
+  screen.render();
 }
 
 function listTimers() {
   if (timers.size === 0) {
-    appendSystemLog('── 没有运行中的定时任务 ──', 'gray');
+    logBox.log('{gray-fg}── 没有运行中的定时任务 ──{/gray-fg}');
+    screen.render();
     return;
   }
 
-  appendSystemLog('定时任务列表：', 'cyan');
-  timers.forEach((timer, id) => {
-    appendSystemLog(`  [${id}]  ${timer.ms}ms  [${timer.encoding}]  ${timer.data}`, 'white');
+  timers.forEach((t, id) => {
+    logBox.log(`  {white-fg}[${id}]{/white-fg}  {yellow-fg}${t.ms}ms{/yellow-fg}  [${t.encoding}]  ${escapeTags(t.data)}`);
   });
+  screen.render();
 }
 
 function stopTimer(arg) {
   if (arg === 'all') {
-    timers.forEach((timer) => {
-      clearInterval(timer.handle);
-    });
+    timers.forEach((t) => clearInterval(t.handle));
     timers.clear();
-    appendSystemLog('── 所有定时任务已停止 ──', 'gray');
+    logBox.log('{gray-fg}── 所有定时任务已停止 ──{/gray-fg}');
+    screen.render();
     return;
   }
 
-  const id = Number.parseInt(arg, 10);
-  if (!Number.isInteger(id) || !timers.has(id)) {
-    appendSystemLog(`✗ 找不到定时任务 [${arg ?? ''}]`, 'red');
-    return;
+  const id = parseInt(arg, 10);
+  if (timers.has(id)) {
+    clearInterval(timers.get(id).handle);
+    timers.delete(id);
+    logBox.log(`{gray-fg}── 定时任务 [${id}] 已停止 ──{/gray-fg}`);
+  } else {
+    logBox.log(`{red-fg}✗ 找不到定时任务 [${escapeTags(arg)}]{/red-fg}`);
   }
-
-  clearInterval(timers.get(id).handle);
-  timers.delete(id);
-  appendSystemLog(`── 定时任务 [${id}] 已停止 ──`, 'gray');
+  screen.render();
 }
 
 function showHelp() {
-  appendSystemLog('可用命令：', 'cyan');
-  COMMANDS.forEach((item) => {
-    appendSystemLog(`  ${item.cmd.padEnd(12, ' ')}  ${item.desc}`, 'white');
+  COMMANDS.forEach((c) => {
+    logBox.log(`{green-fg}${c.cmd.padEnd(10)}{/green-fg}  {white-fg}${c.desc}{/white-fg}`);
   });
+  screen.render();
 }
 
 function handleInput(val) {
-  if (val.startsWith('/')) {
-    const parts = val.trim().split(/\s+/);
-    const cmd = parts[0];
-
-    switch (cmd) {
-      case '/text': {
-        currentMode = 'text';
-        setModeLabel();
-        appendSystemLog('── 已切换到文本模式 ──', 'gray');
-        break;
-      }
-      case '/hex': {
-        currentMode = 'hex';
-        setModeLabel();
-        appendSystemLog('── 已切换到 HEX 模式 ──', 'gray');
-        break;
-      }
-      case '/timer': {
-        const ms = Number.parseInt(parts[1], 10);
-        const data = parts.slice(2).join(' ');
-        if (!Number.isInteger(ms) || ms <= 0 || !data) {
-          appendSystemLog('✗ 用法：/timer <ms> <data>', 'red');
-          break;
-        }
-        addTimer(ms, data, currentMode);
-        break;
-      }
-      case '/timers': {
-        listTimers();
-        break;
-      }
-      case '/stop': {
-        stopTimer(parts[1]);
-        break;
-      }
-      case '/clear': {
-        logBox.setContent('');
-        break;
-      }
-      case '/help': {
-        showHelp();
-        break;
-      }
-      case '/exit': {
-        shutdown(0);
-        return;
-      }
-      default: {
-        appendSystemLog(`✗ 未知命令：${cmd}，输入 /help 查看帮助`, 'red');
-      }
-    }
-  } else {
+  if (!val.startsWith('/')) {
     const data = currentMode === 'text'
       ? val.replace(/\\r/g, '\r').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
       : val;
-
     sendToPort(data, currentMode);
+    return;
+  }
+
+  const parts = val.trim().split(/\s+/);
+  const cmd = parts[0];
+
+  switch (cmd) {
+    case '/text':
+      currentMode = 'text';
+      inputBox.setLabel(`  ${port}  [text] ❯  `);
+      logBox.log('{gray-fg}── 已切换到文本模式 ──{/gray-fg}');
+      break;
+    case '/hex':
+      currentMode = 'hex';
+      inputBox.setLabel(`  ${port}  [hex]  ❯  `);
+      logBox.log('{gray-fg}── 已切换到 HEX 模式 ──{/gray-fg}');
+      break;
+    case '/timer': {
+      const ms = parseInt(parts[1], 10);
+      const data = parts.slice(2).join(' ');
+      if (!ms || !data) {
+        logBox.log('{red-fg}✗ 用法：/timer <ms> <data>{/red-fg}');
+        break;
+      }
+      addTimer(ms, data, currentMode);
+      break;
+    }
+    case '/timers':
+      listTimers();
+      break;
+    case '/stop':
+      stopTimer(parts[1]);
+      break;
+    case '/clear':
+      logBox.setContent('');
+      screen.render();
+      break;
+    case '/help':
+      showHelp();
+      break;
+    case '/exit':
+      cleanup();
+      process.exit(0);
+      return;
+    default:
+      logBox.log(`{red-fg}✗ 未知命令：${escapeTags(cmd)}，输入 /help 查看帮助{/red-fg}`);
+      screen.render();
   }
 
   screen.render();
 }
 
 const dbPath = path.resolve(__dirname, '../serial-db/serial.db');
-const db = new Database(dbPath, { readonly: true });
+const db = new Database(dbPath);
 
 const historyStmt = db.prepare(
   'SELECT id, port, direction, text, timestamp FROM serial_data WHERE port = ? ORDER BY id DESC LIMIT 20'
 );
+
 const pollStmt = db.prepare(
   'SELECT id, port, direction, text, timestamp FROM serial_data WHERE port = ? AND id > ? ORDER BY id ASC'
 );
 
-function loadHistory() {
-  const history = historyStmt.all(port).reverse();
-  if (history.length > 0) {
-    lastId = history[history.length - 1].id;
-  }
-  history.forEach((row) => appendLog(row));
-}
-
-const pollHandle = setInterval(() => {
-  try {
-    const rows = pollStmt.all(port, lastId);
-    rows.forEach((row) => {
-      lastId = row.id;
-      appendLog(row);
-    });
-  } catch (err) {
-    appendSystemLog(`✗ 读取数据库失败：${err.message}`, 'red');
-  }
-}, 200);
-
-let exiting = false;
-
-function shutdown(code = 0) {
+function cleanup() {
   if (exiting) {
     return;
   }
   exiting = true;
 
-  clearInterval(pollHandle);
-  timers.forEach((timer) => {
-    clearInterval(timer.handle);
-  });
+  timers.forEach((t) => clearInterval(t.handle));
   timers.clear();
+
+  if (pollHandle) {
+    clearInterval(pollHandle);
+    pollHandle = null;
+  }
 
   try {
     db.close();
   } catch {
-    // ignore close errors
+    // ignore db close error
   }
 
-  screen.destroy();
-  process.exit(code);
+  try {
+    screen.destroy();
+  } catch {
+    // ignore screen destroy error
+  }
 }
-
-inputBox.key(['up', 'down'], (_, key) => {
-  if (hintBox.hidden) {
-    return;
-  }
-
-  if (key.name === 'up') {
-    hintBox.up(1);
-  } else if (key.name === 'down') {
-    hintBox.down(1);
-  }
-  screen.render();
-});
-
-inputBox.key('enter', () => {
-  const val = inputBox.getValue().trim();
-
-  if (!hintBox.hidden && matchedCommands.length > 0) {
-    const index = hintBox.selected;
-    const selected = matchedCommands[index] || matchedCommands[0];
-    if (selected) {
-      inputBox.setValue(`${selected.cmd} `);
-      hideHint();
-      inputBox.focus();
-      screen.render();
-      return;
-    }
-  }
-
-  inputBox.clearValue();
-
-  if (val) {
-    handleInput(val);
-  }
-
-  hideHint();
-  inputBox.focus();
-  screen.render();
-});
-
-inputBox.key('escape', () => {
-  hideHint();
-  inputBox.focus();
-});
 
 inputBox.on('keypress', () => {
   setImmediate(() => {
     const val = inputBox.getValue();
     if (val.startsWith('/')) {
-      showHint(val);
+      const matched = COMMANDS.filter((c) =>
+        val === '/' ? true : c.cmd.startsWith(val.split(' ')[0])
+      );
+      if (matched.length > 0) {
+        showHint(matched);
+      } else {
+        hideHint();
+      }
     } else {
       hideHint();
     }
   });
 });
 
-hintBox.on('select', (_, index) => {
-  const selected = matchedCommands[index];
-  if (!selected) {
-    return;
+inputBox.key(['up'], () => {
+  if (!hintBox.hidden) {
+    hintBox.up(1);
+    screen.render();
   }
-  inputBox.setValue(`${selected.cmd} `);
-  hideHint();
-  inputBox.focus();
-  screen.render();
 });
 
-logBox.on('mouse', (data) => {
-  if (data.action === 'wheelup') {
-    logBox.scroll(-2);
+inputBox.key(['down'], () => {
+  if (!hintBox.hidden) {
+    hintBox.down(1);
     screen.render();
   }
-  if (data.action === 'wheeldown') {
-    logBox.scroll(2);
-    screen.render();
+});
+
+inputBox.key(['enter'], () => {
+  const raw = inputBox.getValue().trim();
+
+  if (!hintBox.hidden && currentHints.length > 0) {
+    const idx = hintBox.selected;
+    const selected = currentHints[idx] || currentHints[0];
+    if (selected) {
+      inputBox.setValue(`${selected.cmd} `);
+      hideHint();
+      screen.render();
+      inputBox.focus();
+      return;
+    }
   }
+
+  inputBox.clearValue();
+  hideHint();
+
+  if (raw) {
+    handleInput(raw);
+  }
+
+  screen.render();
+  inputBox.focus();
+});
+
+inputBox.key(['escape'], () => {
+  hideHint();
+  inputBox.focus();
+});
+
+screen.key(['C-c'], () => {
+  cleanup();
+  process.exit(0);
 });
 
 screen.on('resize', () => {
-  refreshLayout();
+  applyLayout();
 });
 
-screen.key(['C-c'], () => shutdown(0));
-process.on('SIGINT', () => shutdown(0));
-process.on('SIGTERM', () => shutdown(0));
+process.on('exit', cleanup);
+process.on('SIGINT', () => {
+  cleanup();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  cleanup();
+  process.exit(0);
+});
 
-loadHistory();
-showHelp();
-refreshLayout();
+screen.append(logBox);
+screen.append(inputBox);
+screen.append(hintBox);
+
 inputBox.focus();
+hideHint();
+
+const history = historyStmt.all(port).reverse();
+lastId = history.length > 0 ? history[history.length - 1].id : 0;
+history.forEach(appendLog);
+
+pollHandle = setInterval(() => {
+  const rows = pollStmt.all(port, lastId);
+  rows.forEach((row) => {
+    lastId = row.id;
+    appendLog(row);
+  });
+}, 200);
