@@ -1,446 +1,419 @@
-import blessed from 'blessed';
+#!/usr/bin/env node
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { render, Box, Text, useApp, useInput, useStdout } from 'ink';
+import Database from 'better-sqlite3';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import http from 'http';
-import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const port = process.argv[2] || 'COM12';
+const portName = process.argv[2] || 'COM3';
 const baudRate = process.argv[3] || '115200';
+const dbPath = path.resolve(__dirname, '../serial-db/serial.db');
 
 const COMMANDS = [
   { cmd: '/text', desc: '切换文本模式' },
   { cmd: '/hex', desc: '切换 HEX 模式' },
-  { cmd: '/timer', desc: '定时发送  用法: /timer <ms> <data>' },
-  { cmd: '/timers', desc: '查看所有定时任务' },
-  { cmd: '/stop', desc: '停止定时任务  用法: /stop <id|all>' },
-  { cmd: '/clear', desc: '清空日志区' },
-  { cmd: '/help', desc: '显示帮助信息' },
-  { cmd: '/exit', desc: '退出监控窗口' }
+  { cmd: '/timer', desc: '定时发送  /timer <ms> <data>' },
+  { cmd: '/timers', desc: '查看定时任务' },
+  { cmd: '/stop', desc: '停止定时任务  /stop <id|all>' },
+  { cmd: '/clear', desc: '清空日志' },
+  { cmd: '/help', desc: '显示帮助' },
+  { cmd: '/exit', desc: '退出' }
 ];
 
-const INPUT_HEIGHT = 3;
-const MAX_HINT_ITEMS = 8;
+const MAX_LOGS = 200;
+const isInputActive = Boolean(process.stdin?.isTTY);
+const h = React.createElement;
 
-let currentMode = 'text';
-let lastId = 0;
-let exiting = false;
-let pollHandle = null;
-
-const timers = new Map();
-let nextTimerId = 1;
-let currentHints = [];
-
-const screen = blessed.screen({
-  smartCSR: true,
-  title: `串口监控 ${port}`,
-  fullUnicode: true,
-  dockBorders: true
-});
-
-const logBox = blessed.log({
-  top: 0,
-  left: 0,
-  width: '100%',
-  height: screen.height - INPUT_HEIGHT,
-  label: `  串口监控  ${port}  │  ${baudRate} baud  `,
-  tags: true,
-  scrollable: true,
-  alwaysScroll: true,
-  scrollbar: { ch: '█', style: { fg: 'gray' } },
-  mouse: true,
-  border: { type: 'line' },
-  style: {
-    border: { fg: 'gray' },
-    label: { fg: 'cyan', bold: true }
-  }
-});
-
-const inputBox = blessed.textbox({
-  bottom: 0,
-  left: 0,
-  width: '100%',
-  height: INPUT_HEIGHT,
-  label: `  ${port}  [text] ❯  `,
-  tags: true,
-  inputOnFocus: true,
-  border: { type: 'line' },
-  style: {
-    border: { fg: 'cyan' },
-    label: { fg: 'green', bold: true },
-    focus: { border: { fg: 'white' } }
-  }
-});
-
-const hintBox = blessed.list({
-  bottom: 0,
-  left: 0,
-  width: '100%',
-  height: 0,
-  hidden: true,
-  tags: true,
-  keys: true,
-  mouse: true,
-  border: { type: 'line' },
-  style: {
-    border: { fg: 'gray' },
-    selected: { bg: 'blue', fg: 'white', bold: true },
-    item: { fg: 'white' },
-    label: { fg: 'gray' }
-  },
-  label: '  命令  '
-});
-
-function escapeTags(text) {
-  return String(text ?? '').replace(/[{}]/g, (ch) => (ch === '{' ? '\\{' : '\\}'));
-}
-
-function getTimestamp(ts) {
-  const d = new Date(ts);
-  const hhmmss = d.toTimeString().slice(0, 8);
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
-  return `${hhmmss}.${ms}`;
-}
-
-function applyLayout() {
-  if (hintBox.hidden) {
-    hintBox.height = 0;
-    inputBox.bottom = 0;
-    logBox.height = screen.height - INPUT_HEIGHT;
-  } else {
-    inputBox.bottom = hintBox.height;
-    logBox.height = screen.height - INPUT_HEIGHT - hintBox.height;
-  }
-  screen.render();
-}
-
-function showHint(matched) {
-  currentHints = matched;
-  const items = matched.map((c) =>
-    `{green-fg}${c.cmd.padEnd(10)}{/green-fg}  {gray-fg}${c.desc}{/gray-fg}`
-  );
-
-  hintBox.setItems(items);
-  const h = Math.min(matched.length, MAX_HINT_ITEMS) + 2;
-  hintBox.height = h;
-  hintBox.bottom = 0;
-  hintBox.hidden = false;
-  hintBox.select(0);
-
-  inputBox.bottom = h;
-  logBox.height = screen.height - INPUT_HEIGHT - h;
-  screen.render();
-}
-
-function hideHint() {
-  currentHints = [];
-  hintBox.hidden = true;
-  hintBox.height = 0;
-  inputBox.bottom = 0;
-  logBox.height = screen.height - INPUT_HEIGHT;
-  screen.render();
-}
-
-function appendLog(entry) {
-  const time = getTimestamp(entry.timestamp);
-  const text = escapeTags(entry.text);
-
-  if (entry.direction === 'tx') {
-    logBox.log(`{gray-fg}${time}{/gray-fg}  {yellow-fg}▶{/yellow-fg}  {white-fg}${text}{/white-fg}`);
-  } else {
-    const isHex = text.startsWith('[HEX]');
-    const color = isHex ? 'cyan' : 'green';
-    logBox.log(`{gray-fg}${time}{/gray-fg}  {${color}-fg}◀{/${color}-fg}  {${color}-fg}${text}{/${color}-fg}`);
-  }
-  screen.render();
-}
-
-function sendToPort(data, encoding) {
-  const body = JSON.stringify({ port, data, encoding });
-  const req = http.request({
-    hostname: '127.0.0.1',
-    port: 7070,
-    path: '/send',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
-    },
-    timeout: 5000
-  }, (res) => {
-    let raw = '';
-    res.on('data', (d) => {
-      raw += d;
-    });
-    res.on('end', () => {
-      try {
-        const r = JSON.parse(raw);
-        if (!r.success) {
-          logBox.log(`{red-fg}✗ 发送失败：${escapeTags(r.error || '未知错误')}{/red-fg}`);
-          screen.render();
-        }
-      } catch {
-        // ignore parse error
+function sendToPort(port, data, encoding) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ port, data, encoding });
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: 7070,
+        path: '/send',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body)
+        },
+        timeout: 5000
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (d) => {
+          raw += d;
+        });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(raw));
+          } catch {
+            resolve({ success: false, error: '响应解析失败' });
+          }
+        });
       }
+    );
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('timeout'));
     });
-  });
 
-  req.on('error', (e) => {
-    logBox.log(`{red-fg}✗ 连接失败：${escapeTags(e.message)}{/red-fg}`);
-    screen.render();
+    req.write(body);
+    req.end();
   });
-
-  req.on('timeout', () => {
-    req.destroy();
-    logBox.log('{red-fg}✗ 发送超时{/red-fg}');
-    screen.render();
-  });
-
-  req.write(body);
-  req.end();
 }
 
-function addTimer(ms, data, encoding) {
-  const id = nextTimerId++;
-  const handle = setInterval(() => sendToPort(data, encoding), ms);
-  timers.set(id, { ms, data, encoding, handle });
-  logBox.log(`{gray-fg}── 定时任务 [${id}] 已启动，每 ${ms}ms 发送 ──{/gray-fg}`);
-  screen.render();
-}
+function Monitor() {
+  const { exit } = useApp();
+  const { stdout } = useStdout();
+  const termHeight = stdout?.rows || 24;
 
-function listTimers() {
-  if (timers.size === 0) {
-    logBox.log('{gray-fg}── 没有运行中的定时任务 ──{/gray-fg}');
-    screen.render();
-    return;
-  }
+  const [logs, setLogs] = useState([]);
+  const [input, setInput] = useState('');
+  const [mode, setMode] = useState('text');
+  const [hints, setHints] = useState([]);
+  const [hintIndex, setHintIndex] = useState(0);
 
-  timers.forEach((t, id) => {
-    logBox.log(`  {white-fg}[${id}]{/white-fg}  {yellow-fg}${t.ms}ms{/yellow-fg}  [${t.encoding}]  ${escapeTags(t.data)}`);
-  });
-  screen.render();
-}
+  const dbRef = useRef(null);
+  const pollRef = useRef(null);
+  const timersRef = useRef(new Map());
+  const nextIdRef = useRef(1);
+  const lastIdRef = useRef(0);
 
-function stopTimer(arg) {
-  if (arg === 'all') {
-    timers.forEach((t) => clearInterval(t.handle));
-    timers.clear();
-    logBox.log('{gray-fg}── 所有定时任务已停止 ──{/gray-fg}');
-    screen.render();
-    return;
-  }
+  const addLog = (entry) => {
+    const d = new Date(entry.timestamp);
+    const time = d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    setLogs((prev) => {
+      const next = [...prev, { ...entry, time }];
+      return next.length > MAX_LOGS ? next.slice(-MAX_LOGS) : next;
+    });
+  };
 
-  const id = parseInt(arg, 10);
-  if (timers.has(id)) {
-    clearInterval(timers.get(id).handle);
-    timers.delete(id);
-    logBox.log(`{gray-fg}── 定时任务 [${id}] 已停止 ──{/gray-fg}`);
-  } else {
-    logBox.log(`{red-fg}✗ 找不到定时任务 [${escapeTags(arg)}]{/red-fg}`);
-  }
-  screen.render();
-}
+  const addMsg = (text, color = 'gray') => {
+    setLogs((prev) => {
+      const next = [...prev, { type: 'msg', text, color }];
+      return next.length > MAX_LOGS ? next.slice(-MAX_LOGS) : next;
+    });
+  };
 
-function showHelp() {
-  COMMANDS.forEach((c) => {
-    logBox.log(`{green-fg}${c.cmd.padEnd(10)}{/green-fg}  {white-fg}${c.desc}{/white-fg}`);
-  });
-  screen.render();
-}
+  const cleanup = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
 
-function handleInput(val) {
-  if (!val.startsWith('/')) {
-    const data = currentMode === 'text'
-      ? val.replace(/\\r/g, '\r').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
-      : val;
-    sendToPort(data, currentMode);
-    return;
-  }
+    timersRef.current.forEach((t) => clearInterval(t.handle));
+    timersRef.current.clear();
 
-  const parts = val.trim().split(/\s+/);
-  const cmd = parts[0];
+    if (dbRef.current) {
+      try {
+        dbRef.current.close();
+      } catch {
+        // ignore close errors
+      }
+      dbRef.current = null;
+    }
+  };
 
-  switch (cmd) {
-    case '/text':
-      currentMode = 'text';
-      inputBox.setLabel(`  ${port}  [text] ❯  `);
-      logBox.log('{gray-fg}── 已切换到文本模式 ──{/gray-fg}');
-      break;
-    case '/hex':
-      currentMode = 'hex';
-      inputBox.setLabel(`  ${port}  [hex]  ❯  `);
-      logBox.log('{gray-fg}── 已切换到 HEX 模式 ──{/gray-fg}');
-      break;
-    case '/timer': {
-      const ms = parseInt(parts[1], 10);
-      const data = parts.slice(2).join(' ');
-      if (!ms || !data) {
-        logBox.log('{red-fg}✗ 用法：/timer <ms> <data>{/red-fg}');
+  useEffect(() => {
+    const db = new Database(dbPath);
+    dbRef.current = db;
+
+    const history = db
+      .prepare(
+        'SELECT id, port, direction, text, timestamp FROM serial_data WHERE port = ? ORDER BY id DESC LIMIT 20'
+      )
+      .all(portName)
+      .reverse();
+
+    if (history.length > 0) {
+      lastIdRef.current = history[history.length - 1].id;
+      history.forEach(addLog);
+    }
+
+    const stmt = db.prepare(
+      'SELECT id, port, direction, text, timestamp FROM serial_data WHERE port = ? AND id > ? ORDER BY id ASC'
+    );
+
+    pollRef.current = setInterval(() => {
+      try {
+        const rows = stmt.all(portName, lastIdRef.current);
+        rows.forEach((row) => {
+          lastIdRef.current = row.id;
+          addLog(row);
+        });
+      } catch (err) {
+        addMsg(`✗ 读取数据库失败：${err.message}`, 'red');
+      }
+    }, 200);
+
+    return () => {
+      cleanup();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (input.startsWith('/')) {
+      const matched = input === '/'
+        ? COMMANDS
+        : COMMANDS.filter((c) => c.cmd.startsWith(input.split(' ')[0]));
+      setHints(matched);
+      setHintIndex(0);
+    } else {
+      setHints([]);
+      setHintIndex(0);
+    }
+  }, [input]);
+
+  const handleSubmit = async (val) => {
+    if (!val.trim()) {
+      return;
+    }
+
+    if (hints.length > 0 && val.startsWith('/') && !val.includes(' ')) {
+      const selected = hints[hintIndex];
+      if (selected) {
+        setInput(`${selected.cmd} `);
+        return;
+      }
+    }
+
+    setInput('');
+    setHints([]);
+    setHintIndex(0);
+
+    if (!val.startsWith('/')) {
+      const data = mode === 'text'
+        ? val.replace(/\\r/g, '\r').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+        : val;
+      try {
+        const result = await sendToPort(portName, data, mode);
+        if (!result.success) {
+          addMsg(`✗ 发送失败：${result.error || '未知错误'}`, 'red');
+        }
+      } catch (err) {
+        addMsg(`✗ 连接失败：${err.message}`, 'red');
+      }
+      return;
+    }
+
+    const parts = val.trim().split(/\s+/);
+    const cmd = parts[0];
+
+    switch (cmd) {
+      case '/text':
+        setMode('text');
+        addMsg('── 已切换到文本模式 ──');
+        break;
+      case '/hex':
+        setMode('hex');
+        addMsg('── 已切换到 HEX 模式 ──');
+        break;
+      case '/timer': {
+        const ms = parseInt(parts[1], 10);
+        const data = parts.slice(2).join(' ');
+        if (!ms || !data) {
+          addMsg('✗ 用法：/timer <ms> <data>', 'red');
+          break;
+        }
+        const id = nextIdRef.current++;
+        const timerMode = mode;
+        const handle = setInterval(() => {
+          sendToPort(portName, data, timerMode).catch(() => {
+            // keep timer alive, omit spam
+          });
+        }, ms);
+        timersRef.current.set(id, { ms, data, mode: timerMode, handle });
+        addMsg(`── 定时任务 [${id}] 已启动，每 ${ms}ms 发送 ──`);
         break;
       }
-      addTimer(ms, data, currentMode);
-      break;
+      case '/timers': {
+        if (timersRef.current.size === 0) {
+          addMsg('── 没有运行中的定时任务 ──');
+          break;
+        }
+        timersRef.current.forEach((timer, id) => {
+          addMsg(`  [${id}]  ${timer.ms}ms  [${timer.mode}]  ${timer.data}`);
+        });
+        break;
+      }
+      case '/stop': {
+        const arg = parts[1];
+        if (arg === 'all') {
+          timersRef.current.forEach((t) => clearInterval(t.handle));
+          timersRef.current.clear();
+          addMsg('── 所有定时任务已停止 ──');
+          break;
+        }
+
+        const id = parseInt(arg, 10);
+        if (timersRef.current.has(id)) {
+          clearInterval(timersRef.current.get(id).handle);
+          timersRef.current.delete(id);
+          addMsg(`── 定时任务 [${id}] 已停止 ──`);
+        } else {
+          addMsg(`✗ 找不到定时任务 [${arg}]`, 'red');
+        }
+        break;
+      }
+      case '/clear':
+        setLogs([]);
+        break;
+      case '/help':
+        COMMANDS.forEach((c) => addMsg(`  ${c.cmd.padEnd(10)}  ${c.desc}`));
+        break;
+      case '/exit':
+        cleanup();
+        exit();
+        process.exit(0);
+        break;
+      default:
+        addMsg(`✗ 未知命令：${cmd}`, 'red');
+        break;
     }
-    case '/timers':
-      listTimers();
-      break;
-    case '/stop':
-      stopTimer(parts[1]);
-      break;
-    case '/clear':
-      logBox.setContent('');
-      screen.render();
-      break;
-    case '/help':
-      showHelp();
-      break;
-    case '/exit':
+  };
+
+  useInput((ch, key) => {
+    if (key.ctrl && ch === 'c') {
       cleanup();
+      exit();
       process.exit(0);
       return;
-    default:
-      logBox.log(`{red-fg}✗ 未知命令：${escapeTags(cmd)}，输入 /help 查看帮助{/red-fg}`);
-      screen.render();
-  }
-
-  screen.render();
-}
-
-const dbPath = path.resolve(__dirname, '../serial-db/serial.db');
-const db = new Database(dbPath);
-
-const historyStmt = db.prepare(
-  'SELECT id, port, direction, text, timestamp FROM serial_data WHERE port = ? ORDER BY id DESC LIMIT 20'
-);
-
-const pollStmt = db.prepare(
-  'SELECT id, port, direction, text, timestamp FROM serial_data WHERE port = ? AND id > ? ORDER BY id ASC'
-);
-
-function cleanup() {
-  if (exiting) {
-    return;
-  }
-  exiting = true;
-
-  timers.forEach((t) => clearInterval(t.handle));
-  timers.clear();
-
-  if (pollHandle) {
-    clearInterval(pollHandle);
-    pollHandle = null;
-  }
-
-  try {
-    db.close();
-  } catch {
-    // ignore db close error
-  }
-
-  try {
-    screen.destroy();
-  } catch {
-    // ignore screen destroy error
-  }
-}
-
-inputBox.on('keypress', () => {
-  setImmediate(() => {
-    const val = inputBox.getValue();
-    if (val.startsWith('/')) {
-      const matched = COMMANDS.filter((c) =>
-        val === '/' ? true : c.cmd.startsWith(val.split(' ')[0])
-      );
-      if (matched.length > 0) {
-        showHint(matched);
-      } else {
-        hideHint();
-      }
-    } else {
-      hideHint();
     }
-  });
-});
 
-inputBox.key(['up'], () => {
-  if (!hintBox.hidden) {
-    hintBox.up(1);
-    screen.render();
-  }
-});
-
-inputBox.key(['down'], () => {
-  if (!hintBox.hidden) {
-    hintBox.down(1);
-    screen.render();
-  }
-});
-
-inputBox.key(['enter'], () => {
-  const raw = inputBox.getValue().trim();
-
-  if (!hintBox.hidden && currentHints.length > 0) {
-    const idx = hintBox.selected;
-    const selected = currentHints[idx] || currentHints[0];
-    if (selected) {
-      inputBox.setValue(`${selected.cmd} `);
-      hideHint();
-      screen.render();
-      inputBox.focus();
+    if (key.return) {
+      handleSubmit(input);
       return;
     }
-  }
 
-  inputBox.clearValue();
-  hideHint();
+    if (key.escape) {
+      setHints([]);
+      return;
+    }
 
-  if (raw) {
-    handleInput(raw);
-  }
+    if (key.upArrow) {
+      if (hints.length > 0) {
+        setHintIndex((prev) => Math.max(0, prev - 1));
+      }
+      return;
+    }
 
-  screen.render();
-  inputBox.focus();
-});
+    if (key.downArrow) {
+      if (hints.length > 0) {
+        setHintIndex((prev) => Math.min(hints.length - 1, prev + 1));
+      }
+      return;
+    }
 
-inputBox.key(['escape'], () => {
-  hideHint();
-  inputBox.focus();
-});
+    if (key.tab) {
+      if (hints.length > 0) {
+        setInput(`${hints[hintIndex].cmd} `);
+      }
+      return;
+    }
 
-screen.key(['C-c'], () => {
-  cleanup();
-  process.exit(0);
-});
+    if (key.backspace || key.delete) {
+      setInput((prev) => prev.slice(0, -1));
+      return;
+    }
 
-screen.on('resize', () => {
-  applyLayout();
-});
+    if (ch && !key.ctrl && !key.meta) {
+      setInput((prev) => prev + ch);
+    }
+  }, { isActive: isInputActive });
 
-process.on('exit', cleanup);
-process.on('SIGINT', () => {
-  cleanup();
-  process.exit(0);
-});
-process.on('SIGTERM', () => {
-  cleanup();
-  process.exit(0);
-});
+  const hintHeight = hints.length > 0 ? Math.min(hints.length, 8) + 2 : 0;
+  const logHeight = Math.max(5, termHeight - 2 - 3 - hintHeight);
+  const visibleLogs = useMemo(() => logs.slice(-Math.max(1, logHeight - 2)), [logs, logHeight]);
 
-screen.append(logBox);
-screen.append(inputBox);
-screen.append(hintBox);
+  const logRows = visibleLogs.map((entry, i) => {
+    if (entry.type === 'msg') {
+      return h(Text, { key: i, color: entry.color || 'gray' }, entry.text);
+    }
 
-inputBox.focus();
-hideHint();
+    const isHex = entry.text?.startsWith('[HEX]');
+    if (entry.direction === 'tx') {
+      return h(
+        Text,
+        { key: i },
+        h(Text, { color: 'gray' }, `${entry.time}  `),
+        h(Text, { color: 'yellow' }, '▶  '),
+        h(Text, { color: 'white' }, entry.text)
+      );
+    }
 
-const history = historyStmt.all(port).reverse();
-lastId = history.length > 0 ? history[history.length - 1].id : 0;
-history.forEach(appendLog);
-
-pollHandle = setInterval(() => {
-  const rows = pollStmt.all(port, lastId);
-  rows.forEach((row) => {
-    lastId = row.id;
-    appendLog(row);
+    return h(
+      Text,
+      { key: i },
+      h(Text, { color: 'gray' }, `${entry.time}  `),
+      h(Text, { color: isHex ? 'cyan' : 'green' }, '◀  '),
+      h(Text, { color: isHex ? 'cyan' : 'green' }, entry.text)
+    );
   });
-}, 200);
+
+  const hintRows = hints.slice(0, 8).map((c, i) =>
+    h(
+      Box,
+      { key: i },
+      h(
+        Text,
+        {
+          color: i === hintIndex ? 'white' : 'green',
+          bold: i === hintIndex,
+          backgroundColor: i === hintIndex ? 'blue' : undefined
+        },
+        c.cmd.padEnd(10)
+      ),
+      h(Text, { color: 'gray' }, `  ${c.desc}`)
+    )
+  );
+
+  return h(
+    Box,
+    { flexDirection: 'column', height: termHeight },
+    h(
+      Box,
+      { borderStyle: 'single', borderColor: 'gray', paddingX: 1 },
+      h(Text, { color: 'cyan', bold: true }, `串口监控  ${portName}`),
+      h(Text, { color: 'gray' }, `  │  ${baudRate} baud`)
+    ),
+    h(
+      Box,
+      {
+        flexDirection: 'column',
+        height: logHeight,
+        borderStyle: 'single',
+        borderColor: 'gray',
+        overflow: 'hidden',
+        paddingX: 1
+      },
+      ...logRows
+    ),
+    h(
+      Box,
+      { borderStyle: 'single', borderColor: 'cyan', paddingX: 1, height: 3 },
+      h(Text, { color: 'green', bold: true }, `${portName}  [${mode}] ❯ `),
+      h(Text, { color: 'white' }, input),
+      h(Text, { color: 'white', bold: true }, '█')
+    ),
+    hints.length > 0
+      ? h(
+          Box,
+          {
+            flexDirection: 'column',
+            borderStyle: 'single',
+            borderColor: 'gray',
+            paddingX: 1,
+            height: hintHeight
+          },
+          ...hintRows
+        )
+      : null
+  );
+}
+
+render(h(Monitor), { exitOnCtrlC: false });
