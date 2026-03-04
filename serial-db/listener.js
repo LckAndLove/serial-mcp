@@ -72,6 +72,7 @@ async function main() {
   const httpCfg = config.http || {};
 
   const delimiter = serialCfg.delimiter || '\r\n';
+  const idleFrameMs = Number(serialCfg.idleFrameMs ?? 30);
   const cleanupInterval = Number(dbCfg.cleanupInterval || 60000);
   const dbPath = dbCfg.path || './serial.db';
   const maxRows = Number(dbCfg.maxRows || 10000);
@@ -104,6 +105,7 @@ async function main() {
   // key: portName, value: { port: SerialPort, sessionId, baudRate, rxBuffer, ...handlers }
   const connectedPorts = new Map();
   const delimiterBuffer = Buffer.from(delimiter, 'utf8');
+  const useDelimiter = delimiterBuffer.length > 0;
   const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
 
   function formatHex(buffer) {
@@ -142,6 +144,7 @@ async function main() {
     if (!state) return false;
 
     const serialPort = state.port;
+    flushPendingRxFrame(portName, state);
 
     if (state.dataHandler) serialPort.off('data', state.dataHandler);
     if (state.errorHandler) serialPort.off('error', state.errorHandler);
@@ -158,6 +161,58 @@ async function main() {
     return true;
   }
 
+  function clearRxFlushTimer(state) {
+    if (state.rxFlushTimer) {
+      clearTimeout(state.rxFlushTimer);
+      state.rxFlushTimer = null;
+    }
+  }
+
+  function insertRxRow(portName, state, frame) {
+    const text = decodeFrame(frame);
+    console.log(`[${formatTimestamp()}] [${portName}] ${text}`);
+
+    try {
+      serialDb.insertRow({
+        port: portName,
+        timestamp: Date.now(),
+        direction: 'rx',
+        raw: frame,
+        text,
+        session_id: state.sessionId,
+      });
+    } catch (err) {
+      console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
+    }
+  }
+
+  function flushPendingRxFrame(portName, state) {
+    clearRxFlushTimer(state);
+
+    if (!state.rxBuffer || state.rxBuffer.length === 0) {
+      return;
+    }
+
+    const frame = state.rxBuffer;
+    state.rxBuffer = Buffer.alloc(0);
+    insertRxRow(portName, state, frame);
+  }
+
+  function scheduleRxFlush(portName, state) {
+    clearRxFlushTimer(state);
+    if (!Number.isFinite(idleFrameMs) || idleFrameMs <= 0) {
+      return;
+    }
+    if (!state.rxBuffer || state.rxBuffer.length === 0) {
+      return;
+    }
+
+    state.rxFlushTimer = setTimeout(() => {
+      state.rxFlushTimer = null;
+      flushPendingRxFrame(portName, state);
+    }, idleFrameMs);
+  }
+
   function attachHandlers(portName, state) {
     const serialPort = state.port;
 
@@ -165,27 +220,16 @@ async function main() {
       const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       state.rxBuffer = Buffer.concat([state.rxBuffer, chunkBuffer]);
 
-      let idx;
-      while ((idx = state.rxBuffer.indexOf(delimiterBuffer)) !== -1) {
-        const frame = state.rxBuffer.slice(0, idx);
-        state.rxBuffer = state.rxBuffer.slice(idx + delimiterBuffer.length);
-
-        const text = decodeFrame(frame);
-        console.log(`[${formatTimestamp()}] [${portName}] ${text}`);
-
-        try {
-          serialDb.insertRow({
-            port: portName,
-            timestamp: Date.now(),
-            direction: 'rx',
-            raw: frame,
-            text,
-            session_id: state.sessionId,
-          });
-        } catch (err) {
-          console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
+      if (useDelimiter) {
+        let idx;
+        while ((idx = state.rxBuffer.indexOf(delimiterBuffer)) !== -1) {
+          const frame = state.rxBuffer.slice(0, idx);
+          state.rxBuffer = state.rxBuffer.slice(idx + delimiterBuffer.length);
+          insertRxRow(portName, state, frame);
         }
       }
+
+      scheduleRxFlush(portName, state);
     };
 
     state.errorHandler = (err) => {
@@ -193,6 +237,7 @@ async function main() {
     };
 
     state.closeHandler = () => {
+      flushPendingRxFrame(portName, state);
       const current = connectedPorts.get(portName);
       if (current && current.port === serialPort) {
         connectedPorts.delete(portName);
@@ -251,6 +296,7 @@ async function main() {
       stopBits,
       parity,
       rxBuffer: Buffer.alloc(0),
+      rxFlushTimer: null,
       dataHandler: null,
       errorHandler: null,
       closeHandler: null,

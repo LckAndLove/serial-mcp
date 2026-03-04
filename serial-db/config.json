@@ -2,7 +2,8 @@
   "serial": {
     "port": "COM3",
     "baudRate": 115200,
-    "delimiter": "\r\n"
+    "delimiter": "\r\n",
+    "idleFrameMs": 30
   },
   "db": {
     "path": "./serial.db",
