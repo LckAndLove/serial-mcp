@@ -18,6 +18,10 @@ function formatTimestamp(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+function logInfo(message) {
+  process.stdout.write(`${message}\n`);
+}
+
 function readJsonBody(req, res) {
   return new Promise((resolve, reject) => {
     const MAX_BODY_SIZE = 1024 * 1024;
@@ -170,7 +174,7 @@ async function main() {
 
   function insertRxRow(portName, state, frame) {
     const text = decodeFrame(frame);
-    console.log(`[${formatTimestamp()}] [${portName}] ${text}`);
+    logInfo(`[${formatTimestamp()}] [${portName}] ${text}`);
 
     try {
       serialDb.insertRow({
@@ -242,7 +246,7 @@ async function main() {
       if (current && current.port === serialPort) {
         connectedPorts.delete(portName);
       }
-      console.log(`[${formatTimestamp()}] [${portName}] 串口已断开`);
+      logInfo(`[${formatTimestamp()}] [${portName}] 串口已断开`);
     };
 
     serialPort.on('data', state.dataHandler);
@@ -305,7 +309,7 @@ async function main() {
     attachHandlers(portName, state);
     connectedPorts.set(portName, state);
 
-    console.log(`[${formatTimestamp()}] 串口已连接: ${portName} @ ${baudRate}, session: ${state.sessionId}`);
+    logInfo(`[${formatTimestamp()}] 串口已连接: ${portName} @ ${baudRate}, session: ${state.sessionId}`);
 
     return {
       success: true,
@@ -443,7 +447,7 @@ async function main() {
         }
 
         state.sessionId = nextSessionId;
-        console.log(`[${formatTimestamp()}] [${portName}] session 切换: ${state.sessionId}`);
+        logInfo(`[${formatTimestamp()}] [${portName}] session 切换: ${state.sessionId}`);
         sendJson(res, 200, { success: true, port: portName, session_id: state.sessionId });
         return;
       }
@@ -470,14 +474,14 @@ async function main() {
   });
 
   httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
-    console.log(`[${formatTimestamp()}] HTTP 服务已启动: http://127.0.0.1:${HTTP_PORT}，等待连接串口...`);
+    logInfo(`[${formatTimestamp()}] HTTP 服务已启动: http://127.0.0.1:${HTTP_PORT}，等待连接串口...`);
   });
 
   setInterval(() => {
     try {
       const deleted = serialDb.cleanup(maxRows);
       if (deleted > 0) {
-        console.log(`[${formatTimestamp()}] cleanup 删除 ${deleted} 条旧数据`);
+        logInfo(`[${formatTimestamp()}] cleanup 删除 ${deleted} 条旧数据`);
       }
     } catch (err) {
       console.error(`[${formatTimestamp()}] cleanup 执行失败:`, err.message || err);

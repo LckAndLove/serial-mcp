@@ -174,6 +174,9 @@ function Monitor() {
   const nextIdRef = useRef(1);
   const lastIdRef = useRef(0);
   const msgSeqRef = useRef(1);
+  const sendHistoryRef = useRef([]);
+  const historyIndexRef = useRef(-1);
+  const historyDraftRef = useRef('');
 
   const mapDbEntry = (entry) => {
     const d = new Date(entry.timestamp);
@@ -222,6 +225,27 @@ function Monitor() {
         // ignore close errors
       }
       dbRef.current = null;
+    }
+  };
+
+  const resetHistoryNavigation = () => {
+    historyIndexRef.current = -1;
+    historyDraftRef.current = '';
+  };
+
+  const pushSendHistory = (value) => {
+    const text = String(value ?? '');
+    if (!text.trim()) {
+      return;
+    }
+
+    const history = sendHistoryRef.current;
+    if (history.length === 0 || history[history.length - 1] !== text) {
+      history.push(text);
+    }
+
+    if (history.length > 200) {
+      history.splice(0, history.length - 200);
     }
   };
 
@@ -302,11 +326,13 @@ function Monitor() {
       return;
     }
 
+    resetHistoryNavigation();
     setInput('');
     setHints([]);
     setHintIndex(0);
 
     if (!val.startsWith('/')) {
+      pushSendHistory(val);
       let data;
 
       if (mode === 'text') {
@@ -465,6 +491,18 @@ function Monitor() {
     if (key.upArrow) {
       if (hints.length > 0) {
         setHintIndex((prev) => (prev - 1 + hints.length) % hints.length);
+      } else if (!input.startsWith('/')) {
+        const history = sendHistoryRef.current;
+        if (history.length > 0) {
+          if (historyIndexRef.current === -1) {
+            historyDraftRef.current = input;
+            historyIndexRef.current = history.length - 1;
+          } else if (historyIndexRef.current > 0) {
+            historyIndexRef.current -= 1;
+          }
+
+          setInput(history[historyIndexRef.current]);
+        }
       }
       return;
     }
@@ -472,6 +510,18 @@ function Monitor() {
     if (key.downArrow) {
       if (hints.length > 0) {
         setHintIndex((prev) => (prev + 1) % hints.length);
+      } else if (!input.startsWith('/')) {
+        const history = sendHistoryRef.current;
+        if (history.length > 0 && historyIndexRef.current !== -1) {
+          if (historyIndexRef.current < history.length - 1) {
+            historyIndexRef.current += 1;
+            setInput(history[historyIndexRef.current]);
+          } else {
+            historyIndexRef.current = -1;
+            setInput(historyDraftRef.current);
+            historyDraftRef.current = '';
+          }
+        }
       }
       return;
     }
@@ -484,11 +534,17 @@ function Monitor() {
     }
 
     if (key.backspace || key.delete) {
+      if (historyIndexRef.current !== -1) {
+        resetHistoryNavigation();
+      }
       setInput((prev) => prev.slice(0, -1));
       return;
     }
 
     if (ch && !key.ctrl && !key.meta) {
+      if (historyIndexRef.current !== -1) {
+        resetHistoryNavigation();
+      }
       setInput((prev) => prev + ch);
     }
   }, { isActive: isInputActive });
@@ -498,14 +554,12 @@ function Monitor() {
   const hintStart = Math.min(Math.max(0, hintIndex - (MAX_HINT_VISIBLE - 1)), maxHintStart);
   const visibleHints = hints.slice(hintStart, hintStart + MAX_HINT_VISIBLE);
   const hintHeight = visibleHintCount > 0 ? visibleHintCount + 1 : 0;
-  const logHeight = Math.max(5, termHeight - 5 - hintHeight);
+  const logHeight = Math.max(5, termHeight - 4 - hintHeight);
   const visibleLogs = useMemo(() => logs.slice(-Math.max(1, logHeight)), [logs, logHeight]);
   const separator = '─'.repeat(Math.max(10, termWidth));
-  const rightCorner = `${baudRate} baud`;
-  const promptPrefix = `${portName} [${mode}${autoEol ? ',eol' : ''}] ❯ `;
+  const promptPrefix = `${portName}(${baudRate})> `;
   const inputRoom = Math.max(0, termWidth - textWidth(promptPrefix) - 1);
   const inputPreview = sliceEndByWidth(input, inputRoom);
-  const rightPad = Math.max(0, termWidth - textWidth(rightCorner));
 
   const logRows = visibleLogs.map((entry, i) => {
     if (entry.type === 'msg') {
@@ -568,7 +622,6 @@ function Monitor() {
       ...logRows
     ),
     h(Text, { color: 'gray' }, separator),
-    h(Text, { color: 'gray' }, `${' '.repeat(rightPad)}${rightCorner}`),
     h(
       Text,
       null,

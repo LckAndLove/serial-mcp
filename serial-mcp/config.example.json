@@ -1,0 +1,15 @@
+{
+  "serial": {
+    "port": "COM_PORT",
+    "baudRate": 115200
+  },
+  "db": {
+    "path": "../serial-db/serial.db"
+  },
+  "listener": {
+    "url": "http://localhost:7070"
+  },
+  "response": {
+    "timeout": 3000
+  }
+}

@@ -52,31 +52,28 @@ const DEFAULT_RESPONSE_TIMEOUT = Number(runtimeConfig.response?.timeout) > 0
   ? Number(runtimeConfig.response.timeout)
   : 3000;
 
-// 封装日志写入，同时输出到控制台和日志文件
-function logToFile(...args) {
+function writeLog(level, ...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
-  const line = `[${timestamp}] ${msg}`;
+  const line = `[${timestamp}] [${level}] ${msg}`;
   fs.appendFile(LOG_FILE, line + "\n", (err) => {
     if (err) process.stderr.write(`[log error] ${err.message}\n`);
   });
+
+  if (level === "error") {
+    process.stderr.write(`${line}\n`);
+  } else {
+    process.stdout.write(`${line}\n`);
+  }
 }
 
-// 封装错误日志写入，同时输出到控制台和日志文件
-function logErrorToFile(...args) {
-  const timestamp = new Date().toISOString();
-  const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
-  const line = `[${timestamp}] ${msg}`;
-  fs.appendFile(LOG_FILE, line + "\n", (err) => {
-    if (err) process.stderr.write(`[log error] ${err.message}\n`);
-  });
+function logInfo(...args) {
+  writeLog("info", ...args);
 }
 
-// 替换 console.log 和 console.error，使其同时写入日志文件
-const originalConsoleLog = console.log;
-const originalConsoleError = console.error;
-console.log = (...args) => { originalConsoleLog(...args); logToFile(...args); };
-console.error = (...args) => { originalConsoleError(...args); logErrorToFile(...args); };
+function logError(...args) {
+  writeLog("error", ...args);
+}
 
 // 按端口维护会话：port -> sessionId
 const sessionMap = new Map();
@@ -97,6 +94,26 @@ function jsonResult(payload, isError = false) {
     content: [{ type: "text", text: JSON.stringify(safePayload) }],
     structuredContent: safePayload,
   };
+}
+
+function okResult(payload = {}) {
+  return jsonResult(payload, false);
+}
+
+function errorResult(message = "操作失败") {
+  return jsonResult({ success: false, error: message }, true);
+}
+
+function toUserError(error, fallback = "操作失败") {
+  if (!error) return fallback;
+  const raw = error instanceof Error ? error.message : String(error);
+  const text = raw.trim();
+  if (!text) return fallback;
+  if (/timeout/i.test(text)) return "请求超时";
+  if (/EADDRINUSE/i.test(text)) return "端口占用";
+  if (/HTTP\s*\d+/i.test(text)) return "服务响应异常";
+  if (/Invalid response/i.test(text)) return "服务返回格式错误";
+  return text;
 }
 
 function normalizeTimestamp(input) {
@@ -229,19 +246,19 @@ async function waitForListener(maxWait = 10000, interval = 500) {
     await sleep(interval);
     try {
       await httpGet(LISTENER_STATUS_URL);
-      console.error("[serial-mcp] listener 已就绪");
+      logInfo("[serial-mcp] listener 已就绪");
       return;
     } catch {
       // keep waiting
     }
   }
-  console.error("[serial-mcp] listener 启动超时，请手动检查");
+  logError("[serial-mcp] listener 启动超时，请手动检查");
 }
 
 async function ensureListener() {
   try {
     await httpGet(LISTENER_STATUS_URL);
-    console.log("[serial-mcp] listener 已在运行");
+    logInfo("[serial-mcp] listener 已在运行");
     return;
   } catch {
     // continue
@@ -272,7 +289,7 @@ async function ensureListener() {
     }
   }
 
-  console.error("[serial-mcp] listener 未检测到，正在自动启动...");
+  logInfo("[serial-mcp] listener 未检测到，正在自动启动...");
   const listenerPath = path.resolve(__dirname, "../serial-db/listener.js");
   listenerChild = spawn(process.execPath, [listenerPath], {
     detached: false,
@@ -465,7 +482,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "list_ports": {
         const ports = await SerialPort.list();
 
-        return jsonResult({
+        return okResult({
           ports: ports.map((item) => ({
             name: item.friendlyName ?? item.path,
             path: item.path,
@@ -488,19 +505,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           sessionMap.set(payload.port, String(result.sessionId));
         }
 
-        return jsonResult(result);
+        return okResult(result);
       }
 
       case "disconnect_port": {
         const port = String(args.port);
         const result = await httpPost(LISTENER_DISCONNECT_URL, { port });
         sessionMap.delete(port);
-        return jsonResult(result);
+        return okResult(result);
       }
 
       case "list_connected": {
         const status = await httpGet(LISTENER_STATUS_URL);
-        return jsonResult({
+        return okResult({
           connected: Boolean(status?.connected),
           ports: Array.isArray(status?.ports) ? status.ports : [],
         });
@@ -511,16 +528,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const status = await httpGet(LISTENER_STATUS_URL);
         const target = findConnectedPort(status, port);
         if (!target) {
-          return {
-            isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                success: false,
-                error: `${port} 未连接，请先调用 connect_port`,
-              }),
-            }],
-          };
+          return errorResult(`${port} 未连接，请先调用 connect_port`);
         }
 
         const data = String(args.data);
@@ -538,7 +546,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           session_id: sessionId,
         });
 
-        return jsonResult({ success: true, ...result });
+        return okResult({ success: true, ...result });
       }
 
       case "read_latest": {
@@ -569,7 +577,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : db.prepare(sql).all(port, limit)
           : [];
 
-        return jsonResult({ rows, count: rows.length });
+        return okResult({ rows, count: rows.length });
       }
 
       case "read_since": {
@@ -598,7 +606,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : db.prepare(sql).all(port, ts)
           : [];
 
-        return jsonResult({ rows, count: rows.length });
+        return okResult({ rows, count: rows.length });
       }
 
       case "send_and_wait": {
@@ -606,16 +614,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const status = await httpGet(LISTENER_STATUS_URL);
         const target = findConnectedPort(status, port);
         if (!target) {
-          return {
-            isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                success: false,
-                error: `${port} 未连接，请先调用 connect_port`,
-              }),
-            }],
-          };
+          return errorResult(`${port} 未连接，请先调用 connect_port`);
         }
 
         const sessionId = sessionMap.get(port) || target.sessionId || null;
@@ -704,16 +703,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const status = await httpGet(LISTENER_STATUS_URL);
         const target = findConnectedPort(status, port);
         if (!target) {
-          return {
-            isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                success: false,
-                error: `${port} 未连接，请先调用 connect_port`,
-              }),
-            }],
-          };
+          return errorResult(`${port} 未连接，请先调用 connect_port`);
         }
 
         const sessionId = randomUUID();
@@ -724,12 +714,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         sessionMap.set(port, sessionId);
-        return jsonResult({ port, session_id: sessionId });
+        return okResult({ port, session_id: sessionId });
       }
 
       case "get_status": {
         const status = await httpGet(LISTENER_STATUS_URL);
-        return jsonResult(status);
+        return okResult(status);
       }
 
       case "detect_device": {
@@ -745,7 +735,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (action === "snapshot") {
           portSnapshot = allPorts.map((item) => item.path);
-          return jsonResult({
+          return okResult({
             success: true,
             action: "snapshot",
             ports: allPorts,
@@ -755,7 +745,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (action === "detect") {
           if (!Array.isArray(portSnapshot)) {
-            return jsonResult({
+            return okResult({
               success: true,
               action: "detect",
               newPorts: [],
@@ -797,7 +787,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
           }
 
-          return jsonResult(result);
+          return okResult(result);
         }
 
         throw new Error("action 必须是 snapshot 或 detect");
@@ -822,7 +812,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           windowsHide: false,
         });
 
-        return jsonResult({
+        return okResult({
           success: true,
           port,
           baudRate,
@@ -834,13 +824,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`未知工具: ${name}`);
     }
   } catch (error) {
-    return jsonResult(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      true,
-    );
+    return errorResult(toUserError(error, "工具调用失败"));
   }
 });
 
@@ -923,6 +907,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[serial-mcp] 启动失败:", err);
+  logError("[serial-mcp] 启动失败:", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
