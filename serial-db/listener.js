@@ -1,8 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const http = require('http');
 const { SerialPort } = require('serialport');
-const lockFile = path.resolve(__dirname, 'listener.lock');
+const DATA_DIR = path.join(os.homedir(), '.serial-mcp');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_PATH = path.join(DATA_DIR, 'serial.db');
+const LOCK_FILE = path.join(DATA_DIR, 'listener.lock');
 
 // 读取同目录配置文件
 const configPath = path.join(__dirname, 'config.json');
@@ -78,7 +82,6 @@ async function main() {
   const delimiter = serialCfg.delimiter || '\r\n';
   const idleFrameMs = Number(serialCfg.idleFrameMs ?? 30);
   const cleanupInterval = Number(dbCfg.cleanupInterval || 60000);
-  const dbPath = dbCfg.path || './serial.db';
   const maxRows = Number(dbCfg.maxRows || 10000);
   const HTTP_PORT = Number(httpCfg.port);
 
@@ -88,10 +91,10 @@ async function main() {
     return;
   }
 
-  fs.writeFileSync(lockFile, String(process.pid));
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
   const cleanupLock = () => {
     try {
-      fs.unlinkSync(lockFile);
+      fs.unlinkSync(LOCK_FILE);
     } catch {}
   };
   process.on('exit', cleanupLock);
@@ -104,7 +107,7 @@ async function main() {
     process.exit();
   });
 
-  const serialDb = new SerialDB(dbPath);
+  const serialDb = new SerialDB(DB_PATH);
 
   // key: portName, value: { port: SerialPort, sessionId, baudRate, rxBuffer, ...handlers }
   const connectedPorts = new Map();

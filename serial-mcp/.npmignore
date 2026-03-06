@@ -1,0 +1,11 @@
+node_modules/
+*.db
+*.db-shm
+*.db-wal
+*.lock
+mcp.log
+test-loop.js
+start-all.bat
+stop-all.bat
+.mcp.json
+serial-virtual/
