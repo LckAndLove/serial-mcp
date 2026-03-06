@@ -73,6 +73,26 @@ serial-mcp/
 
 ## 快速开始
 
+### 方式一：直接使用 exe（推荐）
+
+1. 从 Releases 页面下载 `serial-mcp-server.exe` 和 `serial-monitor.exe`
+2. 放到同一个目录，比如 `C:\serial-mcp\`
+3. 配置 Claude Code 的 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "serial": {
+      "command": "C:\\serial-mcp\\serial-mcp-server.exe"
+    }
+  }
+}
+```
+
+4. 重启 Claude Code，告诉 AI 你的串口信息开始调试
+
+### 方式二：从源码运行
+
 ### 1. 克隆项目
 
 ```bash
