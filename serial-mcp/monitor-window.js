@@ -3,13 +3,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { render, Box, Text, useApp, useInput, useStdout } from 'ink';
 import Database from 'better-sqlite3';
 import http from 'http';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const portName = process.argv[2] || 'COM3';
 const baudRate = process.argv[3] || '115200';
-const dbPath = path.resolve(__dirname, '../serial-db/serial.db');
+const DATA_DIR = path.join(os.homedir(), '.serial-mcp');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const dbPath = path.join(DATA_DIR, 'serial.db');
 
 const COMMANDS = [
   { cmd: '/text', desc: '切换文本模式' },
