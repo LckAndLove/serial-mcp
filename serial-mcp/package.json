@@ -1,6 +1,6 @@
 {
   "name": "@lckandyou/serial-mcp",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "嵌入式 AI 调试串口 MCP 服务，让 Claude Code / Codex CLI 直接读写串口数据",
   "type": "module",
   "main": "server.js",

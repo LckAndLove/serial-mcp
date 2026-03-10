@@ -814,7 +814,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : null;
         const baudRate = Number(args.baudRate || 115200);
         const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
-        const psCmd = `Start-Process cmd -ArgumentList '/k node \\"${monitorPath.replace(/\\/g, "\\\\")}\\" ${port || ""}'`;
+        const monitorPathFwd = monitorPath.replace(/\\/g, "/");
+        const portArg = port ? ` ${port}` : "";
+        const psCmd = `Start-Process cmd -ArgumentList "/k node \`"${monitorPathFwd}\`"${portArg}"`;
+        console.error("[open_monitor] psCmd:", psCmd);
 
         spawn("powershell.exe", [
           "-NoProfile",
