@@ -1,0 +1,40 @@
+name: Publish
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: 安装依赖
+        run: cd serial-mcp && npm install
+      - name: 发布到 npm
+        run: cd serial-mcp && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## 安装方式
+
+            ### Claude Code
+            ```bash
+            claude mcp add serial -- cmd /c npx -y @lckandyou/serial-mcp
+            ```
+
+            ### Codex CLI
+            ```bash
+            codex mcp add serial -- npx -y @lckandyou/serial-mcp
+            ```
+
+            ### 使用方式
+            安装后直接告诉 AI：
+            "我的设备接在 COM5，波特率 115200，帮我连接并打开监控窗口"
