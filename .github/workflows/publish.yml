@@ -13,6 +13,12 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+      - name: 从 tag 提取版本号
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$TAG" >> $GITHUB_ENV
+          cd serial-mcp
+          npm version $TAG --no-git-tag-version
       - name: 安装依赖
         run: cd serial-mcp && npm install
       - name: 发布到 npm
@@ -34,7 +40,3 @@ jobs:
             ```bash
             codex mcp add serial -- npx -y @lckandyou/serial-mcp
             ```
-
-            ### 使用方式
-            安装后直接告诉 AI：
-            "我的设备接在 COM5，波特率 115200，帮我连接并打开监控窗口"
