@@ -1,5 +1,35 @@
 # Changelog
 
+## [v2.0.6] - 2026-04-17
+### 修复
+- open_monitor 改用 explorer.exe + bat 文件绕过 session 限制，监控窗口正常弹出
+
+## [v2.0.5] - 2026-04-17
+### 修复
+- open_monitor psCmd 格式修正，使用双引号和正斜杠路径
+
+## [v2.0.4] - 2026-04-17
+### 修复
+- monitor-window.js 数据库目录自动创建
+
+## [v2.0.3] - 2026-04-17
+### 修复
+- open_monitor 在 npx 环境下路径问题
+
+## [v2.0.2] - 2026-04-17
+### 修复
+- listener 默认配置，补充 http.port 字段
+
+## [v2.0.1] - 2026-04-17
+### 修复
+- listener.js 打包进 npm 包，修复 spawn 路径 ENOENT 问题
+
+## [v2.0.0] - 2026-04-17
+### 新增
+- 发布到 npm，支持 npx 一键使用
+- Claude Code：claude mcp add serial -- cmd /c npx -y @lckandyou/serial-mcp
+- Codex CLI：codex mcp add serial -- npx -y @lckandyou/serial-mcp
+
 ## [v1.5.0] - 2026-04-16
 ### 新增
 - MCP Server 启动时自动拉起 listener，用户无需手动启动服务
