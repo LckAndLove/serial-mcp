@@ -1,33 +1,55 @@
-# Claude Code MCP 接入配置
+# MCP 安装与使用
 
-## 配置方式
+本项目无需手动编辑任何配置文件，直接通过命令安装即可。
 
-Claude Code 通过 MCP（Model Context Protocol）连接 serial-mcp 服务器。
+## 安装
 
-## 配置文件路径
+### Windows
 
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-## 配置内容
-
-```json
-{
-  "mcpServers": {
-    "serial": {
-      "command": "node",
-      "args": ["D:\LCK\COM\serial-mcp\server.js"],
-      "env": {}
-    }
-  }
-}
+#### Claude Code（用户级别，所有项目可用）
+```bash
+claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
 ```
 
-## 启动顺序
+#### Codex CLI
+```bash
+codex mcp add serial -- npx -y @lckandyou/serial-mcp
+```
 
-1. 先启动 serial-virtual：进入 serial-virtual 目录，执行 `npm run device`
-2. 再启动 serial-db：进入 serial-db 目录，执行 `npm run start`
-3. 最后启动 Claude Code，MCP 会自动连接 serial-mcp 服务器
+### Mac/Linux
 
-## 验证
+#### Claude Code
+```bash
+claude mcp add -s user serial -- npx -y @lckandyou/serial-mcp
+```
 
-启动后，在 Claude Code 中输入 `/mcp` 可以查看已连接的 MCP 工具。
+#### Codex CLI
+```bash
+codex mcp add serial -- npx -y @lckandyou/serial-mcp
+```
+
+## 验证安装
+
+```bash
+# Claude Code
+claude mcp list
+
+# Codex CLI
+codex mcp list
+```
+
+## 卸载
+
+```bash
+# Claude Code
+claude mcp remove -s user serial
+
+# Codex CLI
+codex mcp remove serial
+```
+
+## 使用方式
+
+连接好设备后，直接告诉 AI：
+
+`我的设备接在 COM5，波特率 115200，帮我连接并开始调试`

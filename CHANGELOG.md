@@ -27,7 +27,7 @@
 ## [v2.0.0] - 2026-04-17
 ### 新增
 - 发布到 npm，支持 npx 一键使用
-- Claude Code：claude mcp add serial -- cmd /c npx -y @lckandyou/serial-mcp
+- Claude Code：claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
 - Codex CLI：codex mcp add serial -- npx -y @lckandyou/serial-mcp
 
 ## [v1.5.0] - 2026-04-16
