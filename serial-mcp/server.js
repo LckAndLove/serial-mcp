@@ -62,14 +62,10 @@ function writeLog(level, ...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] [${level}] ${msg}`;
-  fs.appendFile(LOG_FILE, line + "\n", (err) => {
-    if (err) process.stderr.write(`[log error] ${err.message}\n`);
-  });
-
-  if (level === "error") {
-    process.stderr.write(`${line}\n`);
-  } else {
-    process.stdout.write(`${line}\n`);
+  try {
+    fs.appendFileSync(LOG_FILE, line + "\n");
+  } catch {
+    // MCP stdio 必须保持干净，日志写入失败时不向终端输出
   }
 }
 
