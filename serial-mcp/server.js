@@ -26,6 +26,7 @@ const DATA_DIR = path.join(os.homedir(), ".serial-mcp");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, "serial.db");
 const LOCK_FILE = path.join(DATA_DIR, "listener.lock");
+const READY_FILE = path.join(DATA_DIR, "listener.ready");
 
 function loadRuntimeConfig() {
   const configPath = path.join(__dirname, "config.json");
@@ -242,10 +243,22 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function waitForListener(maxWait = 10000, interval = 500) {
+async function waitForListener(maxWait = 15000, interval = 100) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
-    await sleep(interval);
+    if (fs.existsSync(READY_FILE)) {
+      try {
+        await httpGet(LISTENER_STATUS_URL);
+        logInfo("[serial-mcp] listener 已就绪");
+        return;
+      } catch {
+        try {
+          fs.unlinkSync(READY_FILE);
+        } catch {
+          // ignore stale ready cleanup errors
+        }
+      }
+    }
     try {
       await httpGet(LISTENER_STATUS_URL);
       logInfo("[serial-mcp] listener 已就绪");
@@ -253,6 +266,7 @@ async function waitForListener(maxWait = 10000, interval = 500) {
     } catch {
       // keep waiting
     }
+    await sleep(interval);
   }
   logError("[serial-mcp] listener 启动超时，请手动检查");
 }
@@ -264,6 +278,14 @@ async function ensureListener() {
     return;
   } catch {
     // continue
+  }
+
+  if (fs.existsSync(READY_FILE) && !fs.existsSync(LOCK_FILE)) {
+    try {
+      fs.unlinkSync(READY_FILE);
+    } catch {
+      // ignore stale ready cleanup errors
+    }
   }
 
   if (fs.existsSync(LOCK_FILE)) {
@@ -280,12 +302,22 @@ async function ensureListener() {
         } catch {
           // ignore stale lock cleanup errors
         }
+        try {
+          fs.unlinkSync(READY_FILE);
+        } catch {
+          // ignore stale ready cleanup errors
+        }
       }
     } else {
       try {
         fs.unlinkSync(LOCK_FILE);
       } catch {
         // ignore malformed lock cleanup errors
+      }
+      try {
+        fs.unlinkSync(READY_FILE);
+      } catch {
+        // ignore malformed ready cleanup errors
       }
     }
   }
