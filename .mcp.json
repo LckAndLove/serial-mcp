@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "serial": {
-      "command": "node",
-      "args": ["./serial-mcp/server.js"]
-    }
-  }
-}
