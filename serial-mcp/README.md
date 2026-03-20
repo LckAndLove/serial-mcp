@@ -1,8 +1,8 @@
-# @lckandyou/serial-mcp
+# serial-mcp
 
 嵌入式 AI 调试串口 MCP 服务，让 Claude Code / Codex CLI 直接读写串口数据，实现编码→烧录→调试的完整闭环。
 
-[![npm](https://img.shields.io/npm/v/@lckandyou/serial-mcp)](https://www.npmjs.com/package/@lckandyou/serial-mcp)
+[![npm](https://img.shields.io/npm/v/serial-mcp)](https://www.npmjs.com/package/serial-mcp)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows-blue)]()
 
@@ -10,17 +10,17 @@
 
 ### Claude Code
 ```bash
-claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- cmd /c npx -y serial-mcp
 ```
 
 ### Codex CLI
 ```bash
-codex mcp add serial -- npx -y @lckandyou/serial-mcp
+codex mcp add serial -- npx -y serial-mcp
 ```
 
 ### Mac / Linux
 ```bash
-claude mcp add -s user serial -- npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- npx -y serial-mcp
 ```
 
 ### 验证安装
@@ -96,5 +96,6 @@ MIT © lckandyou
 ## 相关链接
 
 - [GitHub](https://github.com/LckAndLove/serial-mcp)
-- [npm](https://www.npmjs.com/package/@lckandyou/serial-mcp)
+- [npm](https://www.npmjs.com/package/serial-mcp)
 - [Issues](https://github.com/LckAndLove/serial-mcp/issues)
+
