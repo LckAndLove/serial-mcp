@@ -93,6 +93,11 @@ AI 会自动调用 `detect_device` 识别并连接。
 
 MIT © lckandyou
 
+## 作者
+
+- lckandyou
+- GitHub: https://github.com/LckAndLove
+
 ## 相关链接
 
 - [GitHub](https://github.com/LckAndLove/serial-mcp)
