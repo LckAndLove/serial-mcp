@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SerialPort } from 'serialport';
 import SerialDB from './db.js';
@@ -13,6 +14,8 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'serial.db');
 const LOCK_FILE = path.join(DATA_DIR, 'listener.lock');
 const READY_FILE = path.join(DATA_DIR, 'listener.ready');
+const TOKEN_FILE = path.join(DATA_DIR, 'listener.token');
+const MAX_FRAME_SIZE = 64 * 1024;
 
 let config = {};
 try {
@@ -30,6 +33,13 @@ function formatTimestamp(date = new Date()) {
 
 function logInfo(message) {
   process.stdout.write(`${message}\n`);
+}
+
+function isSafeSerialPath(value) {
+  if (typeof value !== 'string' || /[\r\n\0;&|<>`$]/.test(value)) return false;
+  return process.platform === 'win32'
+    ? /^COM\d+$/i.test(value)
+    : /^\/dev\/(?:tty|cu)[A-Za-z0-9._-]+$/.test(value);
 }
 
 function readJsonBody(req, res) {
@@ -91,6 +101,9 @@ async function main() {
   const MAX_ROWS = Number(dbCfg.maxRows || 10000);
   const HTTP_PORT = Number(config?.http?.port || 7070);
 
+  const listenerToken = randomBytes(32).toString('hex');
+  fs.writeFileSync(TOKEN_FILE, listenerToken, { encoding: 'utf8', mode: 0o600 });
+
   fs.writeFileSync(LOCK_FILE, String(process.pid));
   try {
     fs.unlinkSync(READY_FILE);
@@ -105,8 +118,14 @@ async function main() {
       fs.unlinkSync(READY_FILE);
     } catch {}
   };
+  const cleanupToken = () => {
+    try {
+      if (fs.readFileSync(TOKEN_FILE, 'utf8').trim() === listenerToken) fs.unlinkSync(TOKEN_FILE);
+    } catch {}
+  };
   process.on('exit', cleanupLock);
   process.on('exit', cleanupReady);
+  process.on('exit', cleanupToken);
   process.on('SIGINT', () => {
     cleanupLock();
     cleanupReady();
@@ -238,6 +257,13 @@ async function main() {
       const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       state.rxBuffer = Buffer.concat([state.rxBuffer, chunkBuffer]);
 
+      if (state.rxBuffer.length > MAX_FRAME_SIZE) {
+        logInfo(`[${formatTimestamp()}] [${portName}] 接收帧超过 ${MAX_FRAME_SIZE} 字节，已丢弃`);
+        state.rxBuffer = Buffer.alloc(0);
+        clearRxFlushTimer(state);
+        return;
+      }
+
       if (useDelimiter) {
         let idx;
         while ((idx = state.rxBuffer.indexOf(delimiterBuffer)) !== -1) {
@@ -272,6 +298,9 @@ async function main() {
     const portName = typeof options.port === 'string' ? options.port.trim() : '';
     if (!portName) {
       throw new Error('port is required');
+    }
+    if (!isSafeSerialPath(portName)) {
+      throw new Error('port 格式无效');
     }
 
     const baudRate = Number(options.baudRate || serialCfg.baudRate || 115200);
@@ -334,13 +363,9 @@ async function main() {
   }
 
   const httpServer = http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
+    const authorization = req.headers.authorization || '';
+    if (authorization !== `Bearer ${listenerToken}`) {
+      sendJson(res, 401, { success: false, error: 'Unauthorized' });
       return;
     }
 
@@ -366,6 +391,10 @@ async function main() {
           sendJson(res, 400, { success: false, error: 'port is required' });
           return;
         }
+        if (!isSafeSerialPath(portName)) {
+          sendJson(res, 400, { success: false, error: 'port 格式无效' });
+          return;
+        }
 
         const existed = await closePortState(portName);
         if (!existed) {
@@ -389,6 +418,10 @@ async function main() {
 
         if (!portName) {
           sendJson(res, 400, { success: false, error: 'port is required' });
+          return;
+        }
+        if (!isSafeSerialPath(portName)) {
+          sendJson(res, 400, { success: false, error: 'port 格式无效' });
           return;
         }
         if (!data) {
@@ -446,6 +479,10 @@ async function main() {
 
         if (!portName) {
           sendJson(res, 400, { success: false, error: 'port is required' });
+          return;
+        }
+        if (!isSafeSerialPath(portName)) {
+          sendJson(res, 400, { success: false, error: 'port 格式无效' });
           return;
         }
 

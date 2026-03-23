@@ -85,9 +85,11 @@ AI 会自动调用 `detect_device` 识别并连接。
 
 ## 系统要求
 
-- Node.js >= 18
+- Node.js >= 20（推荐 Node.js 20/22 x64）
 - Windows / Mac / Linux
 - 真实硬件或虚拟串口驱动
+
+项目使用 Node.js + npm 运行，不再依赖 pkg 或 Visual Studio Build Tools 进行 exe 打包。`serialport` 和 `better-sqlite3` 使用对应 Node 版本的预编译原生包；若使用不受支持的 Node/平台组合，npm 仍可能回退到本地原生编译。
 
 ## License
 

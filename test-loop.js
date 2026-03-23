@@ -14,10 +14,10 @@ const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"));
 
 // 从 serial-mcp 目录解析 SDK，避免根目录无 node_modules 时无法加载
 const require = createRequire(import.meta.url);
-const sdkClientPath = require.resolve("@modelcontextprotocol/sdk/client/index.js", {
+const sdkClientPath = require.resolve("@modelcontextprotocol/client", {
   paths: [mcpDir],
 });
-const sdkStdioPath = require.resolve("@modelcontextprotocol/sdk/client/stdio.js", {
+const sdkStdioPath = require.resolve("@modelcontextprotocol/client/stdio", {
   paths: [mcpDir],
 });
 
@@ -74,6 +74,7 @@ const client = new Client(
   },
   {
     capabilities: {},
+    versionNegotiation: { mode: "auto" },
   },
 );
 

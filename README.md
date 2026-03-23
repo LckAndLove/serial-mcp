@@ -27,7 +27,7 @@ AI (Claude Code / Codex CLI)
         │ MCP Protocol
         ▼
 ┌─────────────────┐
-│  serial-mcp     │  MCP Server (9 tools)
+│  serial-mcp     │  MCP Server (12 tools)
 │  server.js      │
 └────────┬────────┘
          │ HTTP POST localhost:7070
@@ -67,8 +67,9 @@ serial-mcp/
 
 ## 依赖
 
-- Node.js v18+
+- Node.js v20+（推荐 Node.js 20/22 x64）
 - Windows 系统
+- 运行时使用 npm/Node.js，不再需要项目级 Visual Studio Build Tools 或 pkg 打包工具
 - 虚拟串口驱动（开发调试用）：[ELTIMA VSP](https://www.eltima.com/products/vspdxp/) 或 [com0com](https://com0com.sourceforge.net)
 
 ## 安装

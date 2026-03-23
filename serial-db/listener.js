@@ -2,11 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
+const crypto = require('crypto');
 const { SerialPort } = require('serialport');
 const DATA_DIR = path.join(os.homedir(), '.serial-mcp');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'serial.db');
 const LOCK_FILE = path.join(DATA_DIR, 'listener.lock');
+const TOKEN_FILE = path.join(DATA_DIR, 'listener.token');
+const MAX_FRAME_SIZE = 64 * 1024;
 
 // 读取同目录配置文件
 const configPath = path.join(__dirname, 'config.json');
@@ -74,6 +77,13 @@ function sendJson(res, code, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function isSafeSerialPath(value) {
+  if (typeof value !== 'string' || /[\r\n\0;&|<>`$]/.test(value)) return false;
+  return process.platform === 'win32'
+    ? /^COM\d+$/i.test(value)
+    : /^\/dev\/(?:tty|cu)[A-Za-z0-9._-]+$/.test(value);
+}
+
 async function main() {
   const serialCfg = config.serial || {};
   const dbCfg = config.db || {};
@@ -84,6 +94,9 @@ async function main() {
   const cleanupInterval = Number(dbCfg.cleanupInterval || 60000);
   const maxRows = Number(dbCfg.maxRows || 10000);
   const HTTP_PORT = Number(httpCfg.port);
+
+  const listenerToken = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(TOKEN_FILE, listenerToken, { encoding: 'utf8', mode: 0o600 });
 
   if (!Number.isInteger(HTTP_PORT) || HTTP_PORT <= 0) {
     console.error(`[${formatTimestamp()}] 配置错误: config.json 缺少有效的 http.port`);
@@ -97,7 +110,13 @@ async function main() {
       fs.unlinkSync(LOCK_FILE);
     } catch {}
   };
+  const cleanupToken = () => {
+    try {
+      if (fs.readFileSync(TOKEN_FILE, 'utf8').trim() === listenerToken) fs.unlinkSync(TOKEN_FILE);
+    } catch {}
+  };
   process.on('exit', cleanupLock);
+  process.on('exit', cleanupToken);
   process.on('SIGINT', () => {
     cleanupLock();
     process.exit();
@@ -227,6 +246,13 @@ async function main() {
       const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       state.rxBuffer = Buffer.concat([state.rxBuffer, chunkBuffer]);
 
+      if (state.rxBuffer.length > MAX_FRAME_SIZE) {
+        console.error(`[${formatTimestamp()}] [${portName}] 接收帧超过 ${MAX_FRAME_SIZE} 字节，已丢弃`);
+        state.rxBuffer = Buffer.alloc(0);
+        clearRxFlushTimer(state);
+        return;
+      }
+
       if (useDelimiter) {
         let idx;
         while ((idx = state.rxBuffer.indexOf(delimiterBuffer)) !== -1) {
@@ -261,6 +287,9 @@ async function main() {
     const portName = typeof options.port === 'string' ? options.port.trim() : '';
     if (!portName) {
       throw new Error('port is required');
+    }
+    if (!isSafeSerialPath(portName)) {
+      throw new Error('port 格式无效');
     }
 
     const baudRate = Number(options.baudRate || 115200);
@@ -323,13 +352,8 @@ async function main() {
   }
 
   const httpServer = http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
+    if (req.headers.authorization !== `Bearer ${listenerToken}`) {
+      sendJson(res, 401, { success: false, error: 'Unauthorized' });
       return;
     }
 
@@ -355,6 +379,10 @@ async function main() {
           sendJson(res, 400, { success: false, error: 'port is required' });
           return;
         }
+        if (!isSafeSerialPath(portName)) {
+          sendJson(res, 400, { success: false, error: 'port 格式无效' });
+          return;
+        }
 
         const existed = await closePortState(portName);
         if (!existed) {
@@ -378,6 +406,10 @@ async function main() {
 
         if (!portName) {
           sendJson(res, 400, { success: false, error: 'port is required' });
+          return;
+        }
+        if (!isSafeSerialPath(portName)) {
+          sendJson(res, 400, { success: false, error: 'port 格式无效' });
           return;
         }
         if (!data) {
@@ -435,6 +467,10 @@ async function main() {
 
         if (!portName) {
           sendJson(res, 400, { success: false, error: 'port is required' });
+          return;
+        }
+        if (!isSafeSerialPath(portName)) {
+          sendJson(res, 400, { success: false, error: 'port 格式无效' });
           return;
         }
 

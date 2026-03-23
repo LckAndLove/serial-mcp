@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -9,12 +9,8 @@ import os from "node:os";
 
 import Database from "better-sqlite3";
 import { SerialPort } from "serialport";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { Server } from "@modelcontextprotocol/server";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -26,6 +22,16 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, "serial.db");
 const LOCK_FILE = path.join(DATA_DIR, "listener.lock");
 const READY_FILE = path.join(DATA_DIR, "listener.ready");
+const TOKEN_FILE = path.join(DATA_DIR, "listener.token");
+const MAX_RESPONSE_TIMEOUT = 30000;
+const MAX_STDIO_BUFFER_SIZE = 10 * 1024 * 1024;
+
+function isSafeSerialPath(value) {
+  if (typeof value !== "string" || /[\r\n\0;&|<>`$]/.test(value)) return false;
+  return process.platform === "win32"
+    ? /^COM\d+$/i.test(value)
+    : /^\/dev\/(?:tty|cu)[A-Za-z0-9._-]+$/.test(value);
+}
 
 function loadRuntimeConfig() {
   const configPath = path.join(currentDir, "config.json");
@@ -57,6 +63,15 @@ const LISTENER_STATUS_URL = buildListenerUrl(runtimeConfig.listener?.url, "/stat
 const DEFAULT_RESPONSE_TIMEOUT = Number(runtimeConfig.response?.timeout) > 0
   ? Number(runtimeConfig.response.timeout)
   : 3000;
+
+function readListenerToken() {
+  try {
+    const token = fs.readFileSync(TOKEN_FILE, "utf8").trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
 
 function writeLog(level, ...args) {
   const timestamp = new Date().toISOString();
@@ -139,7 +154,7 @@ function normalizeTimestamp(input) {
   throw new Error("timestamp 格式无效，请传 ISO 时间字符串或毫秒时间戳");
 }
 
-function httpPost(urlText, body, timeoutMs = 5000) {
+function httpPost(urlText, body, timeoutMs = 5000, token = readListenerToken()) {
   return new Promise((resolve, reject) => {
     const endpoint = new URL(urlText);
     const requestPath = endpoint.pathname && endpoint.pathname !== "" ? endpoint.pathname : "/send";
@@ -148,7 +163,10 @@ function httpPost(urlText, body, timeoutMs = 5000) {
       port: endpoint.port || 80,
       path: requestPath,
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     };
 
     let settled = false;
@@ -190,7 +208,7 @@ function httpPost(urlText, body, timeoutMs = 5000) {
   });
 }
 
-function httpGet(urlText) {
+function httpGet(urlText, token = readListenerToken()) {
   return new Promise((resolve, reject) => {
     const endpoint = new URL(urlText);
     const options = {
@@ -198,6 +216,7 @@ function httpGet(urlText) {
       port: endpoint.port || 80,
       path: endpoint.pathname || "/",
       method: "GET",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     };
 
     let settled = false;
@@ -322,21 +341,8 @@ async function ensureListener() {
   }
 
   logInfo("[serial-mcp] listener 未检测到，正在自动启动...");
-  const isPkg = typeof process.pkg !== "undefined";
-  const listenerExecutable = process.platform === "win32"
-    ? "serial-db-listener.exe"
-    : "serial-db-listener";
-  const listenerPath = isPkg
-    ? path.join(path.dirname(process.execPath), listenerExecutable)
-    : fileURLToPath(new URL("./lib/listener.js", import.meta.url));
-  const listenerArgs = isPkg
-    ? []
-    : [listenerPath];
-  const listenerCmd = isPkg
-    ? listenerPath
-    : "node";
-
-  listenerChild = spawn(listenerCmd, listenerArgs, {
+  const listenerPath = fileURLToPath(new URL("./lib/listener.js", import.meta.url));
+  listenerChild = spawn(process.execPath, [listenerPath], {
     detached: true,
     stdio: "ignore",
     cwd: path.dirname(listenerPath),
@@ -447,9 +453,10 @@ const tools = [
       properties: {
         port: { type: "string" },
         data: { type: "string" },
+        encoding: { type: "string", enum: ["text", "hex"] },
         mode: { type: "string", enum: ["timeout", "delimiter"] },
         delimiter: { type: "string" },
-        timeout: { type: "integer", minimum: 1 },
+        timeout: { type: "integer", minimum: 1, maximum: MAX_RESPONSE_TIMEOUT },
       },
       required: ["port", "data"],
       additionalProperties: false,
@@ -516,9 +523,9 @@ const server = new Server(
   },
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+server.setRequestHandler("tools/list", async () => ({ tools }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler("tools/call", async (request) => {
   try {
     const name = request.params.name;
     const args = request.params.arguments ?? {};
@@ -672,6 +679,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const delimiter = typeof args.delimiter === "string" ? args.delimiter : "";
         const encoding = String(args.encoding || "text");
         const timeout = Number(args.timeout || DEFAULT_RESPONSE_TIMEOUT);
+
+        if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_RESPONSE_TIMEOUT) {
+          throw new Error(`timeout 必须在 1-${MAX_RESPONSE_TIMEOUT} 毫秒之间`);
+        }
 
         if (mode !== "timeout" && mode !== "delimiter") {
           throw new Error("mode 仅支持 timeout 或 delimiter");
@@ -843,20 +854,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? args.port.trim()
           : null;
         const baudRate = Number(args.baudRate || 115200);
-        const portArg = port ? ` ${port}` : "";
-        const baudArg = Number.isFinite(baudRate) ? ` ${baudRate}` : "";
-        const monitorPath = typeof process.pkg !== "undefined"
-          ? path.join(path.dirname(process.execPath), "serial-monitor.exe")
-          : fileURLToPath(new URL("./monitor-window.js", import.meta.url));
-        const monitorPathFwd = monitorPath.replace(/\\/g, "/");
-        const monitorCmd = typeof process.pkg !== "undefined"
-          ? `"${monitorPathFwd}"${portArg}${baudArg}`
-          : `node "${monitorPathFwd}"${portArg}${baudArg}`;
-        const batContent = `@echo off\n${monitorCmd}\npause`;
-        const batPath = path.join(os.tmpdir(), `serial-monitor-${Date.now()}.bat`);
-        fs.writeFileSync(batPath, batContent, "utf8");
+        if (port && !isSafeSerialPath(port)) {
+          throw new Error("port 格式无效");
+        }
+        const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
+        const monitorCmd = process.execPath;
+        const monitorArgs = [monitorPath, ...(port ? [port] : []), String(baudRate)];
 
-        spawn("explorer.exe", [batPath], {
+        spawn(monitorCmd, monitorArgs, {
           detached: true,
           stdio: "ignore",
         }).unref();
@@ -941,8 +946,13 @@ process.on("exit", () => {
 async function main() {
   initDatabase();
   await ensureListener();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  serveStdio(() => server, {
+    legacy: "serve",
+    transport: new StdioServerTransport(process.stdin, process.stdout, {
+      maxBufferSize: MAX_STDIO_BUFFER_SIZE,
+    }),
+    onerror: (error) => logError("[serial-mcp] stdio 错误:", error.message),
+  });
 }
 
 main().catch((err) => {
