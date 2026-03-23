@@ -6,6 +6,9 @@ if (!fs.existsSync('dist')) fs.mkdirSync('dist');
 console.log('打包 serial-mcp-server.exe ...');
 execSync('npm run build:server', { stdio: 'inherit' });
 
+console.log('打包 serial-db-listener.exe ...');
+execSync('npm run build:listener', { stdio: 'inherit' });
+
 console.log('打包 serial-monitor.exe ...');
 execSync('npm run build:monitor', { stdio: 'inherit' });
 

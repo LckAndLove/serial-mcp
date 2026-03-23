@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.js",
-    "build:server": "pkg serial-mcp/server.js --target node18-win-x64 --output dist/serial-mcp-server.exe --config pkg-server.json",
-    "build:monitor": "pkg serial-mcp/monitor-window.js --target node18-win-x64 --output dist/serial-monitor.exe --config pkg-monitor.json"
+    "build:server": "pkg serial-mcp/server.js --target node24-win-x64 --output dist/serial-mcp-server.exe --config pkg-server.json",
+    "build:listener": "pkg serial-mcp/lib/listener.js --target node24-win-x64 --output dist/serial-db-listener.exe --config pkg-server.json",
+    "build:monitor": "pkg serial-mcp/monitor-window.js --target node24-win-x64 --output dist/serial-monitor.exe --config pkg-monitor.json"
   }
 }

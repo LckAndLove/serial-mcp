@@ -9,6 +9,7 @@ dist/
 
 # Claude 本地设置
 .claude/
+.codex/
 
 # SQLite 临时文件
 *.db-shm

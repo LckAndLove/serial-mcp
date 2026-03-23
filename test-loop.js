@@ -112,7 +112,9 @@ try {
 
   // 4. 创建新会话，记录 session_id
   const sessionStart = new Date().toISOString();
-  const sessionResult = await callTool(client, "new_session");
+  const sessionResult = await callTool(client, "new_session", {
+    port: targetPort,
+  });
   const sessionId = sessionResult?.session_id;
   if (!sessionId) {
     throw new Error("new_session 未返回 session_id");

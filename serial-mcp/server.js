@@ -16,12 +16,11 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-// 解析当前文件目录，用于 __dirname 和放置本地 SQLite 数据库文件
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentFile = fileURLToPath(import.meta.url);
+const currentDir = path.dirname(currentFile);
 
 // 日志文件路径
-const LOG_FILE = path.join(__dirname, "mcp.log");
+const LOG_FILE = path.join(currentDir, "mcp.log");
 const DATA_DIR = path.join(os.homedir(), ".serial-mcp");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, "serial.db");
@@ -29,7 +28,7 @@ const LOCK_FILE = path.join(DATA_DIR, "listener.lock");
 const READY_FILE = path.join(DATA_DIR, "listener.ready");
 
 function loadRuntimeConfig() {
-  const configPath = path.join(__dirname, "config.json");
+  const configPath = path.join(currentDir, "config.json");
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
@@ -324,8 +323,11 @@ async function ensureListener() {
 
   logInfo("[serial-mcp] listener 未检测到，正在自动启动...");
   const isPkg = typeof process.pkg !== "undefined";
+  const listenerExecutable = process.platform === "win32"
+    ? "serial-db-listener.exe"
+    : "serial-db-listener";
   const listenerPath = isPkg
-    ? path.join(path.dirname(process.execPath), "serial-db-listener")
+    ? path.join(path.dirname(process.execPath), listenerExecutable)
     : fileURLToPath(new URL("./lib/listener.js", import.meta.url));
   const listenerArgs = isPkg
     ? []
@@ -680,6 +682,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const t0 = Date.now();
+        const cursor = db.prepare(
+          `SELECT COALESCE(MAX(id), 0) AS id FROM serial_data
+           WHERE direction = 'rx' AND port = ? AND session_id = ?`
+        ).get(port, sessionId);
+        let lastId = Number(cursor?.id) || 0;
 
         await httpPost(LISTENER_SEND_URL, {
           port,
@@ -688,27 +695,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           session_id: sessionId,
         });
 
-        // t1: 发送完成时刻，轮询只关注这之后的数据
-        const t1 = Date.now();
-        let lastTimestamp = t1;
-        let lastId = 0;
         let response = "";
         const stmt = db.prepare(
-          `SELECT id, text, timestamp FROM serial_data
+          `SELECT id, text FROM serial_data
            WHERE direction='rx'
            AND port = ?
            AND session_id = ?
-           AND (timestamp > ? OR (timestamp = ? AND id > ?))
-           ORDER BY timestamp ASC, id ASC
+           AND id > ?
+           ORDER BY id ASC
            LIMIT 1`
         );
 
         while (Date.now() - t0 < timeout) {
           await sleep(100);
-          const row = stmt.get(port, sessionId, lastTimestamp, lastTimestamp, lastId);
+          const row = stmt.get(port, sessionId, lastId);
 
           if (row) {
-            lastTimestamp = Number(row.timestamp) || lastTimestamp;
             lastId = Number(row.id) || lastId;
             const text = row.text || "";
             if (mode === "delimiter") {
@@ -841,11 +843,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? args.port.trim()
           : null;
         const baudRate = Number(args.baudRate || 115200);
-        const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
-        const monitorPathFwd = monitorPath.replace(/\\/g, "/");
         const portArg = port ? ` ${port}` : "";
         const baudArg = Number.isFinite(baudRate) ? ` ${baudRate}` : "";
-        const batContent = `@echo off\nnode "${monitorPathFwd}"${portArg}${baudArg}\npause`;
+        const monitorPath = typeof process.pkg !== "undefined"
+          ? path.join(path.dirname(process.execPath), "serial-monitor.exe")
+          : fileURLToPath(new URL("./monitor-window.js", import.meta.url));
+        const monitorPathFwd = monitorPath.replace(/\\/g, "/");
+        const monitorCmd = typeof process.pkg !== "undefined"
+          ? `"${monitorPathFwd}"${portArg}${baudArg}`
+          : `node "${monitorPathFwd}"${portArg}${baudArg}`;
+        const batContent = `@echo off\n${monitorCmd}\npause`;
         const batPath = path.join(os.tmpdir(), `serial-monitor-${Date.now()}.bat`);
         fs.writeFileSync(batPath, batContent, "utf8");
 

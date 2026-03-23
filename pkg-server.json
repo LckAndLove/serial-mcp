@@ -4,6 +4,6 @@
       "serial-db/**/*",
       "serial-mcp/**/*"
     ],
-    "targets": ["node18-win-x64"]
+    "targets": ["node24-win-x64"]
   }
 }
