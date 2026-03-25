@@ -1,6 +1,6 @@
 # Serial MCP Server
 
-![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -67,7 +67,7 @@ serial-mcp/
 
 ## 依赖
 
-- Node.js v20+（推荐 Node.js 20/22 x64）
+- Node.js >=22（推荐 Node.js 24 LTS x64，兼容 Node.js 22 LTS）
 - Windows 系统
 - 运行时使用 npm/Node.js，不再需要项目级 Visual Studio Build Tools 或 pkg 打包工具
 - 虚拟串口驱动（开发调试用）：[ELTIMA VSP](https://www.eltima.com/products/vspdxp/) 或 [com0com](https://com0com.sourceforge.net)

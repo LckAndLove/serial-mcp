@@ -1,5 +1,10 @@
 # Changelog
 
+## [v3.0.2] - 2026-08-07
+### 变更
+- 将最低 Node.js 版本提升到 22
+- 增加 Node.js 24 LTS CI 验证，并更新安装文档
+
 ## [v3.0.1] - 2026-08-07
 ### 文档
 - 更新 npm README，补充安装、手动启动、安全说明和版本检查方式
@@ -7,7 +12,7 @@
 ## [v3.0.0] - 2026-08-07
 ### 变更
 - 升级到 MCP TypeScript SDK v2，支持 `2026-07-28` 协议协商并兼容 legacy 客户端
-- 运行方式统一为 Node.js 20+ + npm，移除 exe/pkg 构建链
+- 运行方式统一为 Node.js 22+ + npm，移除 exe/pkg 构建链
 
 ### 安全修复
 - listener HTTP 接口改为随机 bearer token 鉴权，默认关闭跨域调用
