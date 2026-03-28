@@ -152,7 +152,7 @@ AI 会自动完成连接，无需任何额外配置。
 A: ELTIMA VSP 的虚拟端口不走标准 WMI 枚举，但实际通信正常，不影响使用。
 
 **Q: 支持 Linux/Mac 吗？**  
-A: 串口通信部分支持，但 start-all.bat 仅限 Windows，Linux/Mac 需手动启动各服务。
+A: 完全支持。除 Windows 的 `start-all.bat` / `stop-all.bat` 外，项目还提供了 `start-all.sh` 与 `stop-all.sh` 脚本，Linux/Mac 用户可直接一键启动与停止服务。
 
 **Q: 数据库会无限增长吗？**  
 A: 不会，超过 10000 条自动清理最老的数据，可在 `serial-db/config.json` 的 `maxRows` 调整。

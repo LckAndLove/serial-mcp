@@ -151,3 +151,13 @@ test('invalid monitor arguments are rejected before process launch', async () =>
   assert.match(source, /port 格式无效/);
   assert.match(source, /MAX_RESPONSE_TIMEOUT/);
 });
+
+test('startup and shutdown scripts are available for cross-platform environments', async () => {
+  const startSh = await readFile(path.join(root, 'start-all.sh'), 'utf8');
+  const stopSh = await readFile(path.join(root, 'stop-all.sh'), 'utf8');
+
+  assert.match(startSh, /virtual-device\.js/);
+  assert.match(startSh, /listener\.js/);
+  assert.match(stopSh, /pgrep -f/);
+});
+
