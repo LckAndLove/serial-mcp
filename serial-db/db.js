@@ -30,6 +30,7 @@ class SerialDB {
   constructor(dbPath = resolveDbPath()) {
     // 打开数据库连接
     this.db = new Database(dbPath);
+    this.db.pragma('busy_timeout = 5000');
 
     // 开启 WAL 模式，提高并发读写性能
     this.db.pragma('journal_mode = WAL');

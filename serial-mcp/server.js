@@ -7,18 +7,18 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 
-import Database from "better-sqlite3";
 import { SerialPort } from "serialport";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { Server } from "@modelcontextprotocol/server";
+import SerialDB from "./lib/db.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 
-// 日志文件路径
-const LOG_FILE = path.join(currentDir, "mcp.log");
+// 日志与数据目录统一保存在 ~/.serial-mcp，避免写入只读包目录
 const DATA_DIR = path.join(os.homedir(), ".serial-mcp");
 fs.mkdirSync(DATA_DIR, { recursive: true });
+const LOG_FILE = path.join(DATA_DIR, "mcp.log");
 const DB_PATH = path.join(DATA_DIR, "serial.db");
 const LOCK_FILE = path.join(DATA_DIR, "listener.lock");
 const READY_FILE = path.join(DATA_DIR, "listener.ready");
@@ -419,13 +419,14 @@ const tools = [
   },
   {
     name: "read_latest",
-    description: "从数据库读取最新 N 条收到的数据",
+    description: "从数据库读取最新 N 条数据（默认仅 rx，可通过 direction 查询 tx 或 all）",
     inputSchema: {
       type: "object",
       properties: {
         port: { type: "string" },
         limit: { type: "integer", minimum: 1, maximum: 10000 },
         session_id: { type: "string" },
+        direction: { type: "string", enum: ["rx", "tx", "all"] },
       },
       required: ["port", "limit"],
       additionalProperties: false,
@@ -433,13 +434,14 @@ const tools = [
   },
   {
     name: "read_since",
-    description: "读取某个时间点之后的所有数据",
+    description: "读取某个时间点之后的所有数据（默认仅 rx，可通过 direction 查询 tx 或 all）",
     inputSchema: {
       type: "object",
       properties: {
         port: { type: "string" },
         timestamp: { type: "string" },
         session_id: { type: "string" },
+        direction: { type: "string", enum: ["rx", "tx", "all"] },
       },
       required: ["port", "timestamp"],
       additionalProperties: false,
@@ -605,29 +607,29 @@ server.setRequestHandler("tools/call", async (request) => {
         const port = String(args.port);
         const limit = Number(args.limit);
         const sessionId = args.session_id ? String(args.session_id) : null;
+        const direction = typeof args.direction === "string" ? args.direction : "rx";
 
-        const sql = sessionId
-          ? `
-            SELECT id, port, direction, text, raw, session_id, timestamp
-            FROM serial_data
-            WHERE port = ? AND direction = 'rx' AND session_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-          `
-          : `
-            SELECT id, port, direction, text, raw, session_id, timestamp
-            FROM serial_data
-            WHERE port = ? AND direction = 'rx'
-            ORDER BY id DESC
-            LIMIT ?
-          `;
+        const where = ["port = ?"];
+        const params = [port];
+        if (direction !== "all") {
+          where.push("direction = ?");
+          params.push(direction);
+        }
+        if (sessionId) {
+          where.push("session_id = ?");
+          params.push(sessionId);
+        }
+        params.push(limit);
 
-        // 使用 better-sqlite3 的 all() 一次性读取结果集
-        const rows = db
-          ? sessionId
-            ? db.prepare(sql).all(port, sessionId, limit)
-            : db.prepare(sql).all(port, limit)
-          : [];
+        const sql = `
+          SELECT id, port, direction, text, raw, session_id, timestamp
+          FROM serial_data
+          WHERE ${where.join(" AND ")}
+          ORDER BY id DESC
+          LIMIT ?
+        `;
+
+        const rows = db ? db.prepare(sql).all(...params) : [];
 
         return okResult({ rows, count: rows.length });
       }
@@ -636,27 +638,27 @@ server.setRequestHandler("tools/call", async (request) => {
         const port = String(args.port);
         const ts = normalizeTimestamp(args.timestamp);
         const sessionId = args.session_id ? String(args.session_id) : null;
+        const direction = typeof args.direction === "string" ? args.direction : "rx";
 
-        const sql = sessionId
-          ? `
-            SELECT id, port, direction, text, raw, session_id, timestamp
-            FROM serial_data
-            WHERE port = ? AND direction = 'rx' AND timestamp > ? AND session_id = ?
-            ORDER BY id ASC
-          `
-          : `
-            SELECT id, port, direction, text, raw, session_id, timestamp
-            FROM serial_data
-            WHERE port = ? AND direction = 'rx' AND timestamp > ?
-            ORDER BY id ASC
-          `;
+        const where = ["port = ?", "timestamp > ?"];
+        const params = [port, ts];
+        if (direction !== "all") {
+          where.push("direction = ?");
+          params.push(direction);
+        }
+        if (sessionId) {
+          where.push("session_id = ?");
+          params.push(sessionId);
+        }
 
-        // 使用 better-sqlite3 的 all() 一次性读取结果集
-        const rows = db
-          ? sessionId
-            ? db.prepare(sql).all(port, ts, sessionId)
-            : db.prepare(sql).all(port, ts)
-          : [];
+        const sql = `
+          SELECT id, port, direction, text, raw, session_id, timestamp
+          FROM serial_data
+          WHERE ${where.join(" AND ")}
+          ORDER BY id ASC
+        `;
+
+        const rows = db ? db.prepare(sql).all(...params) : [];
 
         return okResult({ rows, count: rows.length });
       }
@@ -693,10 +695,12 @@ server.setRequestHandler("tools/call", async (request) => {
         }
 
         const t0 = Date.now();
+        const sessionClause = sessionId ? "session_id = ?" : "session_id IS NULL";
+        const cursorParams = sessionId ? [port, sessionId] : [port];
         const cursor = db.prepare(
           `SELECT COALESCE(MAX(id), 0) AS id FROM serial_data
-           WHERE direction = 'rx' AND port = ? AND session_id = ?`
-        ).get(port, sessionId);
+           WHERE direction = 'rx' AND port = ? AND ${sessionClause}`
+        ).get(...cursorParams);
         let lastId = Number(cursor?.id) || 0;
 
         await httpPost(LISTENER_SEND_URL, {
@@ -706,33 +710,39 @@ server.setRequestHandler("tools/call", async (request) => {
           session_id: sessionId,
         });
 
+        const chunks = [];
         let response = "";
         const stmt = db.prepare(
           `SELECT id, text FROM serial_data
-           WHERE direction='rx'
+           WHERE direction = 'rx'
            AND port = ?
-           AND session_id = ?
+           AND ${sessionClause}
            AND id > ?
-           ORDER BY id ASC
-           LIMIT 1`
+           ORDER BY id ASC`
         );
 
+        const isLineDelimiter = delimiter === "\r\n" || delimiter === "\n" || delimiter === "\r";
         while (Date.now() - t0 < timeout) {
           await sleep(100);
-          const row = stmt.get(port, sessionId, lastId);
+          const rows = sessionId
+            ? stmt.all(port, sessionId, lastId)
+            : stmt.all(port, lastId);
 
-          if (row) {
-            lastId = Number(row.id) || lastId;
-            const text = row.text || "";
+          if (rows.length > 0) {
+            lastId = Number(rows[rows.length - 1].id) || lastId;
+            for (const row of rows) {
+              if (row.text != null) chunks.push(row.text);
+            }
+            const combined = chunks.join("\n");
             if (mode === "delimiter") {
-              if (text.includes(delimiter)) {
-                response = text;
+              if (combined.includes(delimiter) || (isLineDelimiter && chunks.length > 0)) {
+                response = combined;
                 break;
               }
               continue;
             }
 
-            response = text;
+            response = combined;
             break;
           }
         }
@@ -894,19 +904,8 @@ async function shutdown() {
 }
 
 function initDatabase() {
-  db = new Database(DB_PATH);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS serial_data (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      port TEXT,
-      timestamp INTEGER,
-      direction TEXT,
-      raw BLOB,
-      text TEXT,
-      session_id TEXT
-    )
-  `);
+  const serialDb = new SerialDB(DB_PATH);
+  db = serialDb.db;
 }
 
 process.on("SIGINT", async () => {

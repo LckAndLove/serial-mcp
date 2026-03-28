@@ -11,7 +11,7 @@ const DB_PATH = path.join(DATA_DIR, 'serial.db');
 class SerialDB {
   constructor(dbPath = DB_PATH) {
     this.db = new Database(dbPath);
-
+    this.db.pragma('busy_timeout = 5000');
     this.db.pragma('journal_mode = WAL');
 
     this.db.exec(`
