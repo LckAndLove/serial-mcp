@@ -60,11 +60,10 @@ AI 会自动完成连接，无需任何额外配置。
 node server.js
 ```
 
-listener 和 monitor 通常由 MCP Server 自动管理，也可以分别运行：
+listener 通常由 MCP Server 自动管理，也可以手动运行：
 
 ```bash
 node lib/listener.js
-node monitor-window.js COM5 115200
 ```
 
 ## 功能
@@ -76,7 +75,6 @@ node monitor-window.js COM5 115200
 | SQLite 数据持久化 | ✅ 稳定 |
 | 多串口并发 | ✅ 稳定 |
 | 设备自动检测 | ✅ 稳定 |
-| TUI 监控窗口 | ✅ 稳定 |
 | 定时发送 | ✅ 稳定 |
 | Modbus RTU | 🚧 开发中 |
 
@@ -95,22 +93,11 @@ node monitor-window.js COM5 115200
 | `read_latest` | 读取最新 N 条数据 |
 | `read_since` | 读取某时间点后的数据 |
 | `new_session` | 烧录后创建新会话 |
-| `open_monitor` | 弹出 TUI 监控窗口 |
-
-## 监控窗口
-
-AI 调用 `open_monitor` 工具后会弹出独立的终端监控窗口：
-
-- 实时显示 TX/RX 数据，带时间戳
-- 支持直接输入发送（文本/HEX 双模式）
-- 定时发送：`/timer 1000 hello\r\n`
-- 斜杠命令：`/hex` `/text` `/timers` `/stop` `/clear`
 
 ## 安全说明
 
 - listener 的 HTTP 接口默认只接受本次启动生成的 bearer token，未授权请求返回 `401`。
 - 串口端口名会按操作系统校验；Windows 使用 `COM1`、`COM12` 等格式，Linux/macOS 使用受控的 `/dev/tty*` 或 `/dev/cu.*` 格式。
-- `open_monitor` 使用参数数组启动 Node 进程，不经过 shell 或临时 `.bat` 文件。
 - token 和 SQLite 数据默认保存在用户目录下的 `.serial-mcp` 文件夹中，请勿将其中的 token 文件提交到仓库或日志。
 
 ## 真实硬件接入

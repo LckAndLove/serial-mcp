@@ -94,8 +94,7 @@ test('MCP server exposes the tool list over legacy stdio handshake', async () =>
 
     const tools = await waitForLine(child, (message) => message.id === 2);
     assert.equal(tools.error, undefined);
-    assert.equal(tools.result.tools.length, 12);
-    assert.ok(tools.result.tools.some((tool) => tool.name === 'open_monitor'));
+    assert.equal(tools.result.tools.length, 11);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill();
@@ -123,7 +122,7 @@ test('v2 client auto-negotiates the modern stdio protocol', async () => {
   try {
     await client.connect(transport);
     const result = await client.listTools();
-    assert.equal(result.tools.length, 12);
+    assert.equal(result.tools.length, 11);
     assert.equal(client.getProtocolEra(), 'modern');
   } finally {
     await client.close().catch(() => {});
@@ -138,17 +137,15 @@ test('security-sensitive inputs are guarded in source', async () => {
 
   assert.match(server, /serveStdio/);
   assert.match(server, /maxBufferSize: MAX_STDIO_BUFFER_SIZE/);
-  assert.match(server, /spawn\(monitorCmd, monitorArgs/);
-  assert.doesNotMatch(server, /batContent|explorer\.exe/);
+  assert.doesNotMatch(server, /batContent|explorer\.exe|open_monitor/);
   assert.match(listener, /authorization/);
   assert.match(listener, /MAX_FRAME_SIZE/);
   assert.doesNotMatch(listener, /Access-Control-Allow-Origin/);
   assert.match(virtualDevice, /MAX_INPUT_BUFFER/);
 });
 
-test('invalid monitor arguments are rejected before process launch', async () => {
+test('response timeout limits are guarded in source', async () => {
   const source = await readFile(path.join(root, 'serial-mcp', 'server.js'), 'utf8');
-  assert.match(source, /port 格式无效/);
   assert.match(source, /MAX_RESPONSE_TIMEOUT/);
 });
 
@@ -161,3 +158,29 @@ test('startup and shutdown scripts are available for cross-platform environments
   assert.match(stopSh, /pgrep -f/);
 });
 
+test('SerialDB persists, queries, and cleans up SQLite rows', async () => {
+  const { default: SerialDB } = await import(pathToFileURL(path.join(root, 'serial-mcp', 'lib', 'db.js')).href);
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'serial-mcp-db-test-'));
+  const tmpDbPath = path.join(tmpDir, 'test.db');
+
+  const serialDb = new SerialDB(tmpDbPath);
+  try {
+    const sid = serialDb.newSession();
+    serialDb.insertRow({ port: 'COM5', direction: 'rx', text: 'line1', raw: Buffer.from('line1'), session_id: sid, timestamp: 1000 });
+    serialDb.insertRow({ port: 'COM5', direction: 'tx', text: 'AT', raw: Buffer.from('AT'), session_id: sid, timestamp: 2000 });
+    serialDb.insertRow({ port: 'COM5', direction: 'rx', text: 'OK', raw: Buffer.from('OK'), session_id: sid, timestamp: 3000 });
+
+    const rows = serialDb.queryRows({ session_id: sid, limit: 10 });
+    assert.equal(rows.length, 3);
+    assert.equal(rows[0].text, 'OK');
+
+    const deleted = serialDb.cleanup(1);
+    assert.equal(deleted, 2);
+    assert.equal(serialDb.queryRows({ session_id: sid }).length, 1);
+  } finally {
+    serialDb.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
