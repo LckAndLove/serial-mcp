@@ -30,7 +30,6 @@ jobs:
           node --check serial-db/listener.js
           node --check serial-db/db.js
           node --check serial-mcp/server.js
-          node --check serial-mcp/monitor-window.js
           node --check serial-virtual/virtual-device.js
       - name: 自动化测试
         run: npm test

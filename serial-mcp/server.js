@@ -26,13 +26,6 @@ const TOKEN_FILE = path.join(DATA_DIR, "listener.token");
 const MAX_RESPONSE_TIMEOUT = 30000;
 const MAX_STDIO_BUFFER_SIZE = 10 * 1024 * 1024;
 
-function isSafeSerialPath(value) {
-  if (typeof value !== "string" || /[\r\n\0;&|<>`$]/.test(value)) return false;
-  return process.platform === "win32"
-    ? /^COM\d+$/i.test(value)
-    : /^\/dev\/(?:tty|cu)[A-Za-z0-9._-]+$/.test(value);
-}
-
 function loadRuntimeConfig() {
   const configPath = path.join(currentDir, "config.json");
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -499,18 +492,6 @@ const tools = [
       additionalProperties: false,
     },
   },
-  {
-    name: "open_monitor",
-    description: "打开一个独立的命令行窗口，实时显示串口数据。TX 和 RX 数据都会显示，带时间戳。关闭窗口即停止监控，不影响串口连接。",
-    inputSchema: {
-      type: "object",
-      properties: {
-        port: { type: "string" },
-        baudRate: { type: "integer", minimum: 1 },
-      },
-      additionalProperties: false,
-    },
-  },
 ];
 
 const server = new Server(
@@ -857,31 +838,6 @@ server.setRequestHandler("tools/call", async (request) => {
         }
 
         throw new Error("action 必须是 snapshot 或 detect");
-      }
-
-      case "open_monitor": {
-        const port = typeof args.port === "string" && args.port.trim() !== ""
-          ? args.port.trim()
-          : null;
-        const baudRate = Number(args.baudRate || 115200);
-        if (port && !isSafeSerialPath(port)) {
-          throw new Error("port 格式无效");
-        }
-        const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
-        const monitorCmd = process.execPath;
-        const monitorArgs = [monitorPath, ...(port ? [port] : []), String(baudRate)];
-
-        spawn(monitorCmd, monitorArgs, {
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-
-        return okResult({
-          success: true,
-          port,
-          baudRate,
-          message: `监控窗口已打开，port: ${port || "ALL"}`,
-        });
       }
 
       default:

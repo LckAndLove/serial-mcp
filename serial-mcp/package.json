@@ -9,7 +9,6 @@
   },
   "files": [
     "server.js",
-    "monitor-window.js",
     "config.json",
     "lib/listener.js",
     "lib/db.js"
@@ -40,9 +39,6 @@
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "better-sqlite3": "^12.9.0",
-    "blessed": "^0.1.81",
-    "ink": "^7.0.0",
-    "react": "^19.2.5",
     "serialport": "^13.0.0"
   },
   "scripts": {

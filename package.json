@@ -8,7 +8,6 @@
   "scripts": {
     "start": "node serial-mcp/server.js",
     "start:listener": "node serial-db/listener.js",
-    "start:monitor": "node serial-mcp/monitor-window.js",
     "test": "node tests/run-tests.js"
   }
 }
