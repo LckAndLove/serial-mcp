@@ -20,7 +20,7 @@ jobs:
           TAG=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$TAG" >> $GITHUB_ENV
           cd serial-mcp
-          npm version $TAG --no-git-tag-version
+          npm version $TAG --no-git-tag-version --allow-same-version
       - name: 安装依赖
         run: cd serial-mcp && npm install
       - name: 发布到 npm
