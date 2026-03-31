@@ -1,10 +1,19 @@
 # Changelog
 
-## [v3.0.3] - 2026-10-27
+## [v3.0.3] - 2026-03-30
 ### 新增
-- 为 Linux / macOS 增加 start-all.sh 与 stop-all.sh 脚本，支持非 Windows 环境一键启动与停止相关服务
-- 补充跨平台启动脚本与权限的自动化测试用例
-- 更新 README 跨平台说明
+- 为 Linux / macOS 增加 `start-all.sh` 与 `stop-all.sh` 脚本，支持非 Windows 环境一键启动与停止相关服务
+- `read_latest` 与 `read_since` 新增可选 `direction` 参数（`rx` / `tx` / `all`，默认 `rx`）
+- 补充 `SerialDB` SQLite 持久化与清理、跨平台脚本的自动化测试用例
+
+### 修复与加固
+- `server.js` 改用 `SerialDB` 初始化数据库，统一开启 `WAL`、索引和 `busy_timeout = 5000`，降低多进程并发锁冲突
+- 修复 `send_and_wait` 在 `sessionId` 为空、换行分隔符匹配及多行响应时的查询逻辑
+- 将 `mcp.log` 移至 `~/.serial-mcp/mcp.log`，避免全局/`npx` 安装时写入只读包目录
+- 发布工作流升级至 Node.js 24 并允许同版本发布
+
+### 破坏性变更
+- 移除 `open_monitor` 工具及 `monitor-window.js`，精简移除 `ink`、`react`、`blessed` 依赖（MCP 工具调整为 11 个）
 
 ## [v3.0.2] - 2026-08-07
 ### 变更

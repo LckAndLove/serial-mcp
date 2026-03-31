@@ -4,7 +4,7 @@
 
 [![npm](https://img.shields.io/npm/v/serial-mcp)](https://www.npmjs.com/package/serial-mcp)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![platform](https://img.shields.io/badge/platform-Windows-blue)]()
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)]()
 
 ## 安装
 
@@ -23,19 +23,19 @@ npm install -g serial-mcp
 serial-mcp
 ```
 
-### Claude Code
+### Claude Code（Windows）
 ```bash
 claude mcp add -s user serial -- cmd /c npx -y serial-mcp@latest
+```
+
+### Claude Code（macOS / Linux）
+```bash
+claude mcp add -s user serial -- npx -y serial-mcp@latest
 ```
 
 ### Codex CLI
 ```bash
 codex mcp add serial -- npx -y serial-mcp@latest
-```
-
-### Mac / Linux
-```bash
-claude mcp add -s user serial -- npx -y serial-mcp@latest
 ```
 
 ### 验证安装
@@ -75,30 +75,29 @@ node lib/listener.js
 | SQLite 数据持久化 | ✅ 稳定 |
 | 多串口并发 | ✅ 稳定 |
 | 设备自动检测 | ✅ 稳定 |
-| 定时发送 | ✅ 稳定 |
 | Modbus RTU | 🚧 开发中 |
 
-## MCP 工具列表
+## MCP 工具列表（11 个）
 
 | 工具 | 说明 |
 |------|------|
 | `list_ports` | 扫描系统所有可用串口 |
 | `list_connected` | 查看当前已接管的串口 |
-| `connect_port` | 接管指定串口 |
+| `connect_port` | 接管指定串口并创建新会话 |
 | `disconnect_port` | 释放指定串口 |
-| `detect_device` | 自动检测新插入的串口设备 |
+| `detect_device` | 自动检测新插入的串口设备（支持 `auto_connect`） |
 | `get_status` | 所有串口连接状态 |
-| `send_data` | 向指定串口发送数据 |
-| `send_and_wait` | 发送指令并等待响应 |
-| `read_latest` | 读取最新 N 条数据 |
-| `read_since` | 读取某时间点后的数据 |
+| `send_data` | 向指定串口发送数据（支持 `text` / `hex`，写入 `direction=tx`） |
+| `send_and_wait` | 发送指令并等待响应（支持 `timeout` / `delimiter` 模式） |
+| `read_latest` | 读取最新 N 条数据（默认 `rx`，可通过 `direction` 查询 `tx` 或 `all`） |
+| `read_since` | 读取某时间点后的数据（默认 `rx`，可通过 `direction` 查询 `tx` 或 `all`） |
 | `new_session` | 烧录后创建新会话 |
 
-## 安全说明
+## 安全与存储说明
 
-- listener 的 HTTP 接口默认只接受本次启动生成的 bearer token，未授权请求返回 `401`。
-- 串口端口名会按操作系统校验；Windows 使用 `COM1`、`COM12` 等格式，Linux/macOS 使用受控的 `/dev/tty*` 或 `/dev/cu.*` 格式。
-- token 和 SQLite 数据默认保存在用户目录下的 `.serial-mcp` 文件夹中，请勿将其中的 token 文件提交到仓库或日志。
+- listener 的 HTTP 接口仅监听 `127.0.0.1` 且默认校验本次启动生成的随机 bearer token，未授权请求返回 `401`。
+- 串口端口名会按操作系统校验；Windows 使用 `COM1`、`COM12` 等格式，Linux / macOS 使用受控的 `/dev/tty*` 或 `/dev/cu.*` 格式。
+- token、运行日志（`mcp.log`）与 SQLite 数据库（`serial.db`，启用 WAL 与 `busy_timeout`）均保存在用户目录下的 `~/.serial-mcp` 文件夹中，请勿将其中的 token 文件提交到仓库或日志。
 
 ## 真实硬件接入
 
@@ -110,10 +109,10 @@ AI 会自动调用 `detect_device` 识别并连接。
 ## 系统要求
 
 - Node.js >= 22（推荐 Node.js 24 LTS x64，兼容 Node.js 22 LTS）
-- Windows / Mac / Linux
+- Windows / macOS / Linux
 - 真实硬件或虚拟串口驱动
 
-项目使用 Node.js + npm 运行，不再需要项目级 Visual Studio Build Tools 或 exe/pkg 打包工具。`serialport` 和 `better-sqlite3` 在受支持的 Node 22/24 x64 Windows 环境优先使用预编译原生包；若使用不受支持的 Node/平台组合，npm 仍可能回退到本地原生编译。
+项目使用 Node.js + npm 运行，不再需要项目级 Visual Studio Build Tools 或 exe/pkg 打包工具。`serialport` 和 `better-sqlite3` 在受支持的 Node 22/24 环境优先使用预编译原生包；若使用不受支持的 Node/平台组合，npm 仍可能回退到本地原生编译。
 
 ### 更新到最新版
 
@@ -143,4 +142,3 @@ MIT © lckandyou
 - [GitHub](https://github.com/LckAndLove/serial-mcp)
 - [npm](https://www.npmjs.com/package/serial-mcp)
 - [Issues](https://github.com/LckAndLove/serial-mcp/issues)
-

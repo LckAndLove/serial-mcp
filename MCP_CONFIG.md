@@ -1,6 +1,6 @@
 # MCP 安装与使用
 
-本项目无需手动编辑任何配置文件，直接通过命令安装即可。
+本项目无需手动编辑任何配置文件，要求 **Node.js >= 22**（推荐 Node.js 24 LTS），直接通过命令安装即可。
 
 ## 安装
 
@@ -8,24 +8,24 @@
 
 #### Claude Code（用户级别，所有项目可用）
 ```bash
-claude mcp add -s user serial -- cmd /c npx -y serial-mcp
+claude mcp add -s user serial -- cmd /c npx -y serial-mcp@latest
 ```
 
 #### Codex CLI
 ```bash
-codex mcp add serial -- npx -y serial-mcp
+codex mcp add serial -- npx -y serial-mcp@latest
 ```
 
-### Mac/Linux
+### macOS / Linux
 
 #### Claude Code
 ```bash
-claude mcp add -s user serial -- npx -y serial-mcp
+claude mcp add -s user serial -- npx -y serial-mcp@latest
 ```
 
 #### Codex CLI
 ```bash
-codex mcp add serial -- npx -y serial-mcp
+codex mcp add serial -- npx -y serial-mcp@latest
 ```
 
 ## 验证安装
@@ -52,5 +52,6 @@ codex mcp remove serial
 
 连接好设备后，直接告诉 AI：
 
-`我的设备接在 COM5，波特率 115200，帮我连接并开始调试`
+> 我的设备接在 COM5，波特率 115200，帮我连接并开始调试
 
+数据、日志与鉴权 token 默认保存在用户目录 `~/.serial-mcp/` 下。
