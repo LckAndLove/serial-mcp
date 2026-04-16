@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import fs from "node:fs";
 
-import Database from "better-sqlite3";
+import initSqlJs from "sql.js";
 import { SerialPort } from "serialport";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -11,38 +12,20 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-// 解析当前文件目录，用于存放 SQLite 数据库文件
+// 解析当前文件目录，用于放置本地 SQLite 数据库文件
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const dbPath = path.join(__dirname, "serial_mcp.db");
-
-// 初始化数据库，所有串口收发数据都记录到 serial_logs 表
-const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
-db.exec(`
-  CREATE TABLE IF NOT EXISTS serial_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    port TEXT NOT NULL,
-    direction TEXT NOT NULL CHECK(direction IN ('tx','rx')),
-    data BLOB NOT NULL,
-    data_text TEXT,
-    data_hex TEXT NOT NULL,
-    session_id TEXT,
-    timestamp TEXT NOT NULL
-  );
-`);
-
-// 预编译常用写入语句，提高写入效率
-const insertLogStmt = db.prepare(`
-  INSERT INTO serial_logs (port, direction, data, data_text, data_hex, session_id, timestamp)
-  VALUES (@port, @direction, @data, @data_text, @data_hex, @session_id, @timestamp)
-`);
 
 // 已打开串口状态映射：key=端口路径，value=状态对象
 const openPorts = new Map();
 
 // 当前活动 session_id（调用 new_session 后会更新）
 let activeSessionId = null;
+
+// 数据库相关状态（sql.js 为异步初始化）
+let db = null;
+let dbPath = null;
+let insertLogStmt = null;
 
 function jsonResult(payload, isError = false) {
   return {
@@ -96,16 +79,19 @@ function toBuffer(data, encoding = "text") {
 }
 
 function writeLog({ port, direction, buffer, sessionId }) {
+  if (!db || !insertLogStmt) return;
   // 串口收发统一落库，便于后续按端口/会话追溯
-  insertLogStmt.run({
+  insertLogStmt.bind({
     port,
     direction,
-    data: buffer,
+    data: buffer.toString("utf8"),
     data_text: buffer.toString("utf8"),
     data_hex: buffer.toString("hex"),
     session_id: sessionId ?? activeSessionId,
     timestamp: new Date().toISOString(),
   });
+  insertLogStmt.step();
+  insertLogStmt.reset();
 }
 
 function getOpenedPortState(port) {
@@ -442,9 +428,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             LIMIT ?
           `;
 
-        const rows = sessionId
-          ? db.prepare(sql).all(port, sessionId, limit)
-          : db.prepare(sql).all(port, limit);
+        let rows = [];
+        if (db) {
+          const stmt = db.prepare(sql);
+          if (sessionId) {
+            stmt.bind([port, sessionId, limit]);
+          } else {
+            stmt.bind([port, limit]);
+          }
+          while (stmt.step()) {
+            rows.push(stmt.getAsObject());
+          }
+          stmt.free();
+        }
 
         return jsonResult({ rows, count: rows.length });
       }
@@ -468,9 +464,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ORDER BY id ASC
           `;
 
-        const rows = sessionId
-          ? db.prepare(sql).all(port, ts, sessionId)
-          : db.prepare(sql).all(port, ts);
+        let rows = [];
+        if (db) {
+          const stmt = db.prepare(sql);
+          if (sessionId) {
+            stmt.bind([port, ts, sessionId]);
+          } else {
+            stmt.bind([port, ts]);
+          }
+          while (stmt.step()) {
+            rows.push(stmt.getAsObject());
+          }
+          stmt.free();
+        }
 
         return jsonResult({ rows, count: rows.length });
       }
@@ -546,11 +552,48 @@ async function shutdown() {
 
   await Promise.allSettled(closeJobs);
 
-  try {
-    db.close();
-  } catch {
-    // 忽略数据库关闭异常
+  // 保存数据库到文件
+  if (db && dbPath) {
+    try {
+      const data = db.export();
+      fs.writeFileSync(dbPath, Buffer.from(data));
+      db.close();
+    } catch {
+      // 忽略数据库关闭异常
+    }
   }
+}
+
+async function initDatabase() {
+  const SQL = await initSqlJs();
+  const configPath = path.join(__dirname, "config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  dbPath = path.resolve(__dirname, config.db?.path || "../serial-db/serial.db");
+
+  if (fs.existsSync(dbPath)) {
+    const fileBuffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(fileBuffer);
+  } else {
+    db = new SQL.Database();
+  }
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS serial_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      port TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('tx','rx')),
+      data TEXT NOT NULL,
+      data_text TEXT,
+      data_hex TEXT NOT NULL,
+      session_id TEXT,
+      timestamp TEXT NOT NULL
+    )
+  `);
+
+  insertLogStmt = db.prepare(`
+    INSERT INTO serial_logs (port, direction, data, data_text, data_hex, session_id, timestamp)
+    VALUES (@port, @direction, @data, @data_text, @data_hex, @session_id, @timestamp)
+  `);
 }
 
 process.on("SIGINT", async () => {
@@ -563,6 +606,13 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-// 通过 stdio 作为 MCP 传输层
-const transport = new StdioServerTransport();
-await server.connect(transport);
+async function main() {
+  await initDatabase();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch((err) => {
+  console.error("[serial-mcp] 启动失败:", err);
+  process.exit(1);
+});
