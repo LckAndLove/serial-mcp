@@ -132,20 +132,16 @@ class SerialDB {
       throw new Error('maxRows 必须是大于等于 0 的数字');
     }
 
-    const total = this.db.prepare('SELECT COUNT(*) AS c FROM serial_data').get().c;
-    const toDelete = total - keep;
-    if (toDelete <= 0) {
+    const count = this.db.prepare('SELECT COUNT(*) as n FROM serial_data').get().n;
+    if (count <= keep) {
       return 0;
     }
 
-    const result = this.db.prepare(`
-      DELETE FROM serial_data
-      WHERE id IN (
-        SELECT id FROM serial_data
-        ORDER BY timestamp ASC, id ASC
-        LIMIT @toDelete
+    const result = this.db
+      .prepare(
+        'DELETE FROM serial_data WHERE id IN (SELECT id FROM serial_data ORDER BY id ASC LIMIT ?)'
       )
-    `).run({ toDelete });
+      .run(count - keep);
 
     return result.changes;
   }
