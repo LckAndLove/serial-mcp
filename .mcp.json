@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "serial": {
+      "command": "node",
+      "args": ["D:\LCK\COM\serial-mcp\server.js"]
+    }
+  }
+}
