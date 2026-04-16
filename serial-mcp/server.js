@@ -681,7 +681,7 @@ function initDatabase() {
       direction TEXT,
       raw BLOB,
       text TEXT,
-      session_id TEXT,
+      session_id TEXT
     )
   `);
 
