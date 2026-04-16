@@ -77,8 +77,8 @@ const originalConsoleError = console.error;
 console.log = (...args) => { originalConsoleLog(...args); logToFile(...args); };
 console.error = (...args) => { originalConsoleError(...args); logErrorToFile(...args); };
 
-// 当前活动 session_id（调用 new_session 后会更新）
-let activeSessionId = null;
+// 按端口维护会话：port -> sessionId
+const sessionMap = new Map();
 
 // 数据库相关状态（better-sqlite3 为同步初始化）
 let db = null;
@@ -220,6 +220,11 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function findConnectedPort(status, port) {
+  const list = Array.isArray(status?.ports) ? status.ports : [];
+  return list.find((item) => item?.port === port) || null;
+}
+
 const tools = [
   {
     name: "list_ports",
@@ -251,13 +256,25 @@ const tools = [
     description: "断开当前串口连接",
     inputSchema: {
       type: "object",
+      properties: {
+        port: { type: "string" },
+      },
+      required: ["port"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_connected",
+    description: "返回当前已连接的串口列表",
+    inputSchema: {
+      type: "object",
       properties: {},
       additionalProperties: false,
     },
   },
   {
     name: "send_data",
-    description: "向串口发送数据，写入数据库 direction=tx。port 参数仅作记录标记，实际串口由 connect_port 统一管理",
+    description: "向指定串口发送数据，写入数据库 direction=tx",
     inputSchema: {
       type: "object",
       properties: {
@@ -265,7 +282,7 @@ const tools = [
         data: { type: "string" },
         encoding: { type: "string", enum: ["text", "hex"] },
       },
-      required: ["data", "encoding"],
+      required: ["port", "data", "encoding"],
       additionalProperties: false,
     },
   },
@@ -309,7 +326,7 @@ const tools = [
         delimiter: { type: "string" },
         timeout: { type: "integer", minimum: 1 },
       },
-      required: ["data"],
+      required: ["port", "data"],
       additionalProperties: false,
     },
   },
@@ -318,7 +335,10 @@ const tools = [
     description: "创建新 session_id",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        port: { type: "string" },
+      },
+      required: ["port"],
       additionalProperties: false,
     },
   },
@@ -376,27 +396,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const result = await httpPost(LISTENER_CONNECT_URL, payload);
         if (result?.sessionId) {
-          activeSessionId = String(result.sessionId);
+          sessionMap.set(payload.port, String(result.sessionId));
         }
 
         return jsonResult(result);
       }
 
       case "disconnect_port": {
-        const result = await httpPost(LISTENER_DISCONNECT_URL, {});
+        const port = String(args.port);
+        const result = await httpPost(LISTENER_DISCONNECT_URL, { port });
+        sessionMap.delete(port);
         return jsonResult(result);
       }
 
-      case "send_data": {
+      case "list_connected": {
         const status = await httpGet(LISTENER_STATUS_URL);
-        if (!status.connected) {
+        return jsonResult({
+          connected: Boolean(status?.connected),
+          ports: Array.isArray(status?.ports) ? status.ports : [],
+        });
+      }
+
+      case "send_data": {
+        const port = String(args.port);
+        const status = await httpGet(LISTENER_STATUS_URL);
+        const target = findConnectedPort(status, port);
+        if (!target) {
           return {
             isError: true,
             content: [{
               type: "text",
               text: JSON.stringify({
                 success: false,
-                error: "串口未连接，请先调用 connect_port",
+                error: `${port} 未连接，请先调用 connect_port`,
               }),
             }],
           };
@@ -404,12 +436,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const data = String(args.data);
         const encoding = String(args.encoding || "text");
+        const sessionId = sessionMap.get(port) || target.sessionId || null;
+        if (target?.sessionId) {
+          sessionMap.set(port, String(target.sessionId));
+        }
 
         // 通过 HTTP 转发给 listener 写入串口
         const result = await httpPost(LISTENER_SEND_URL, {
+          port,
           data,
           encoding,
-          session_id: activeSessionId,
+          session_id: sessionId,
         });
 
         return jsonResult({ success: true, ...result });
@@ -476,18 +513,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send_and_wait": {
+        const port = String(args.port);
         const status = await httpGet(LISTENER_STATUS_URL);
-        if (!status.connected) {
+        const target = findConnectedPort(status, port);
+        if (!target) {
           return {
             isError: true,
             content: [{
               type: "text",
               text: JSON.stringify({
                 success: false,
-                error: "串口未连接，请先调用 connect_port",
+                error: `${port} 未连接，请先调用 connect_port`,
               }),
             }],
           };
+        }
+
+        const sessionId = sessionMap.get(port) || target.sessionId || null;
+        if (target?.sessionId) {
+          sessionMap.set(port, String(target.sessionId));
         }
 
         const data = String(args.data);
@@ -507,9 +551,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const t0 = Date.now();
 
         await httpPost(LISTENER_SEND_URL, {
+          port,
           data,
           encoding,
-          session_id: activeSessionId,
+          session_id: sessionId,
         });
 
         // t1: 发送完成时刻，轮询只关注这之后的数据
@@ -520,6 +565,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const stmt = db.prepare(
           `SELECT id, text, timestamp FROM serial_data
            WHERE direction='rx'
+           AND port = ?
            AND session_id = ?
            AND (timestamp > ? OR (timestamp = ? AND id > ?))
            ORDER BY timestamp ASC, id ASC
@@ -528,7 +574,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         while (Date.now() - t0 < timeout) {
           await sleep(100);
-          const row = stmt.get(activeSessionId, lastTimestamp, lastTimestamp, lastId);
+          const row = stmt.get(port, sessionId, lastTimestamp, lastTimestamp, lastId);
 
           if (row) {
             lastTimestamp = Number(row.timestamp) || lastTimestamp;
@@ -565,14 +611,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "new_session": {
+        const port = String(args.port);
+        const status = await httpGet(LISTENER_STATUS_URL);
+        const target = findConnectedPort(status, port);
+        if (!target) {
+          return {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: `${port} 未连接，请先调用 connect_port`,
+              }),
+            }],
+          };
+        }
+
         const sessionId = randomUUID();
 
         await httpPost(LISTENER_SESSION_URL, {
+          port,
           session_id: sessionId,
         });
 
-        activeSessionId = sessionId;
-        return jsonResult({ session_id: activeSessionId });
+        sessionMap.set(port, sessionId);
+        return jsonResult({ port, session_id: sessionId });
       }
 
       case "get_status": {
