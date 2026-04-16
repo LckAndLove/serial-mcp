@@ -1,0 +1,12 @@
+{
+  "name": "serial-mcp",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "sql.js": "^1.11.0",
+    "serialport": "^13.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
