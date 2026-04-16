@@ -533,26 +533,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send_and_wait": {
-        const port = String(args.port);
         const data = String(args.data);
-        const mode = String(args.mode);
-        const timeout = Number(args.timeout);
         const encoding = String(args.encoding || "text");
-
+        const timeout = Number(args.timeout);
         const t0 = Date.now();
 
-        // 发送指令到 listener
-        await httpPost("http://localhost:7070/send", { data, encoding });
+        await httpPost(LISTENER_HTTP, {
+          data,
+          encoding,
+        });
 
-        // 简单轮询等待响应
         let response = "";
         while (Date.now() - t0 < timeout) {
-          await new Promise(r => setTimeout(r, 100));
-          const rows = db.prepare(
+          await sleep(100);
+          const row = db.prepare(
             "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? ORDER BY id ASC LIMIT 1"
-          ).all(t0);
-          if (rows.length > 0) {
-            response = rows[0].text || "";
+          ).get(t0);
+
+          if (row) {
+            response = row.text || "";
             break;
           }
         }
@@ -560,7 +559,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const timedOut = response === "";
         return {
           isError: false,
-          content: [{ type: "text", text: JSON.stringify({ success: true, response, duration: Date.now() - t0, timedOut }) }]
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                response,
+                duration: Date.now() - t0,
+                timedOut,
+              }),
+            },
+          ],
         };
       }
 
