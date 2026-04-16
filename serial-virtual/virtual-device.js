@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { SerialPort } = require('serialport');
 
 // 生成统一格式时间戳：[YYYY-MM-DD HH:mm:ss]
@@ -20,33 +19,21 @@ function logWithTimestamp(message) {
   console.log(`${getTimestamp()} ${message}`);
 }
 
-// 检测 Windows 下 com0com 是否已安装
-function isCom0comInstalled() {
-  const checks = [
-    // 常见注册表位置（64 位）
-    'reg query "HKLM\\SOFTWARE\\com0com"',
-    // 常见注册表位置（32 位兼容）
-    'reg query "HKLM\\SOFTWARE\\WOW6432Node\\com0com"',
-    // 若 setupc 在 PATH 中，也可视为已安装
-    'where setupc.exe',
-  ];
-
-  for (const cmd of checks) {
-    try {
-      execSync(cmd, { stdio: 'ignore' });
-      return true;
-    } catch (err) {
-      // 单项检查失败继续下一项
+// 列出当前可用串口
+async function listAvailablePorts() {
+  try {
+    const ports = await SerialPort.list();
+    if (ports.length === 0) {
+      console.log('未发现可用串口');
+    } else {
+      console.log('当前可用串口：');
+      ports.forEach((p) => {
+        console.log(`  - ${p.path} (${p.friendlyName || 'unknown'})`);
+      });
     }
+  } catch (err) {
+    console.log('枚举串口失败:', err.message);
   }
-
-  // 再尝试检测默认安装目录
-  const commonPaths = [
-    'C:\\Program Files\\com0com\\setupc.exe',
-    'C:\\Program Files (x86)\\com0com\\setupc.exe',
-  ];
-
-  return commonPaths.some((filePath) => fs.existsSync(filePath));
 }
 
 // 从同目录读取配置
@@ -78,16 +65,10 @@ function createSerialWriter(port) {
   };
 }
 
-function main() {
-  // 1) 启动先检查 com0com
-  if (!isCom0comInstalled()) {
-    console.error('未检测到 com0com，请先安装：https://com0com.sourceforge.net');
-    process.exit(1);
-  }
-
+async function main() {
   const { portA, baudRate, autoOutputInterval } = loadConfig();
 
-  // 2) 根据 config.json 连接 portA（当前配置应为 COM2）
+  // 直接尝试打开串口，不再检测驱动
   const port = new SerialPort({
     path: portA,
     baudRate,
@@ -95,20 +76,18 @@ function main() {
   });
 
   const writeLine = createSerialWriter(port);
-
-  // 用于按 \r\n 组包解析指令
   let inputBuffer = '';
 
   port.on('open', () => {
     logWithTimestamp(`虚拟设备已连接 ${portA}，波特率 ${baudRate}`);
 
-    // 3) 每秒自动输出传感器数据（带时间戳）
+    // 每秒自动输出传感器数据（带时间戳）
     setInterval(() => {
       writeLine('SENSOR temp=25.3 humidity=60.1\r\n');
     }, autoOutputInterval);
   });
 
-  // 4) 接收指令并返回对应响应
+  // 接收指令并返回对应响应
   port.on('data', (chunk) => {
     inputBuffer += chunk.toString('utf8');
 
@@ -143,12 +122,16 @@ function main() {
     logWithTimestamp(`串口错误: ${err.message}`);
   });
 
-  port.open((err) => {
-    if (err) {
-      console.error(`${getTimestamp()} 打开串口 ${portA} 失败: ${err.message}`);
-      process.exit(1);
-    }
-  });
+  // 尝试打开串口，失败时列出可用串口
+  try {
+    await new Promise((resolve, reject) => {
+      port.open((err) => (err ? reject(err) : resolve()));
+    });
+  } catch (err) {
+    console.error(`${getTimestamp()} 打开串口 ${portA} 失败: ${err.message}`);
+    await listAvailablePorts();
+    process.exit(1);
+  }
 }
 
 try {
