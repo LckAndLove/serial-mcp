@@ -20,8 +20,8 @@ async function main() {
   const serialCfg = config.serial || {};
   const dbCfg = config.db || {};
 
-  // 端口参数按需求默认 COM11 / 115200，且支持从配置覆盖
-  const portName = serialCfg.port || 'COM11';
+  // 端口参数按需求默认 COM44 / 115200，且支持从配置覆盖
+  const portName = serialCfg.port || 'COM44';
   const baudRate = Number(serialCfg.baudRate || 115200);
   const delimiter = serialCfg.delimiter || '\r\n';
   const cleanupInterval = Number(dbCfg.cleanupInterval || 60000);

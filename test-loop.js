@@ -96,8 +96,8 @@ try {
     }
   }
 
-  // 3. 打开 COM11，波特率 115200
-  const targetPort = "COM11";
+  // 3. 打开 COM44，波特率 115200
+  const targetPort = "COM44";
   await callTool(client, "open_port", {
     port: targetPort,
     baudRate: 115200,

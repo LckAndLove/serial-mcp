@@ -28,7 +28,7 @@ function loadConfig() {
 
 const { port: portPath, baudRate } = loadConfig();
 
-// 连接虚拟串口 COM11（portB）
+// 连接虚拟串口（portB = COM44）
 const port = new SerialPort({
   path: portPath,
   baudRate: baudRate,
@@ -37,7 +37,7 @@ const port = new SerialPort({
 
 // 串口打开成功提示
 port.on('open', () => {
-  console.log(`${getTimestamp()} 已连接到 COM11（portB），开始监听数据...`);
+  console.log(`${getTimestamp()} 已连接到 ${portPath}，开始监听数据...`);
 });
 
 // 打印所有收到的数据，带时间戳前缀
