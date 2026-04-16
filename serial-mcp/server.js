@@ -113,7 +113,7 @@ function normalizeTimestamp(input) {
   throw new Error("timestamp 格式无效，请传 ISO 时间字符串或毫秒时间戳");
 }
 
-function httpPost(urlText, body) {
+function httpPost(urlText, body, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const endpoint = new URL(urlText);
     const requestPath = endpoint.pathname && endpoint.pathname !== "" ? endpoint.pathname : "/send";
@@ -125,6 +125,18 @@ function httpPost(urlText, body) {
       headers: { "Content-Type": "application/json" },
     };
 
+    let settled = false;
+    const doneResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const doneReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     const req = http.request(options, (res) => {
       let data = "";
       res.on("data", chunk => { data += chunk; });
@@ -132,17 +144,21 @@ function httpPost(urlText, body) {
         try {
           const json = JSON.parse(data);
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(json);
+            doneResolve(json);
           } else {
-            reject(new Error(json.error || `HTTP ${res.statusCode}`));
+            doneReject(new Error(json.error || `HTTP ${res.statusCode}`));
           }
         } catch {
-          reject(new Error(`Invalid response: ${data}`));
+          doneReject(new Error(`Invalid response: ${data}`));
         }
       });
     });
 
-    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error("HTTP request timeout"));
+    });
+
+    req.on("error", doneReject);
     req.write(JSON.stringify(body));
     req.end();
   });
@@ -454,11 +470,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const row =
             mode === "delimiter"
               ? db.prepare(
-                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? AND text LIKE ? ORDER BY id ASC LIMIT 1"
-              ).get(t0, `%${delimiter}%`)
+                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? AND session_id = ? AND text LIKE ? ORDER BY id ASC LIMIT 1"
+              ).get(t0, activeSessionId, `%${delimiter}%`)
               : db.prepare(
-                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? ORDER BY id ASC LIMIT 1"
-              ).get(t0);
+                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? AND session_id = ? ORDER BY id ASC LIMIT 1"
+              ).get(t0, activeSessionId);
 
           if (row) {
             response = row.text || "";

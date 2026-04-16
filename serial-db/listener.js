@@ -17,18 +17,40 @@ function formatTimestamp(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, res) {
   return new Promise((resolve, reject) => {
+    const MAX_BODY_SIZE = 1024 * 1024;
     let body = '';
-    req.on('data', (chunk) => { body += chunk; });
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(body || '{}'));
-      } catch (err) {
-        reject(err);
+    let settled = false;
+    const doneResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const doneReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body, 'utf8') > MAX_BODY_SIZE) {
+        res.writeHead(413);
+        res.end('Request too large');
+        req.destroy();
+        doneResolve(null);
       }
     });
-    req.on('error', reject);
+    req.on('end', () => {
+      if (settled) return;
+      try {
+        doneResolve(JSON.parse(body || '{}'));
+      } catch (err) {
+        doneReject(err);
+      }
+    });
+    req.on('error', doneReject);
   });
 }
 
@@ -221,7 +243,8 @@ async function main() {
     try {
       // POST /connect
       if (req.method === 'POST' && url.pathname === '/connect') {
-        const payload = await readJsonBody(req);
+        const payload = await readJsonBody(req, res);
+        if (payload === null) return;
         const result = await connectPort(payload);
         sendJson(res, 200, result);
         return;
@@ -241,7 +264,9 @@ async function main() {
           return;
         }
 
-        const { data, encoding = 'text', session_id } = await readJsonBody(req);
+        const payload = await readJsonBody(req, res);
+        if (payload === null) return;
+        const { data, encoding = 'text', session_id } = payload;
         if (!data) {
           sendJson(res, 400, { error: 'data is required' });
           return;
@@ -285,7 +310,8 @@ async function main() {
 
       // POST /session
       if (req.method === 'POST' && url.pathname === '/session') {
-        const payload = await readJsonBody(req);
+        const payload = await readJsonBody(req, res);
+        if (payload === null) return;
         const nextSessionId =
           typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
 
