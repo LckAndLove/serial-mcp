@@ -264,9 +264,9 @@ async function main() {
           return;
         }
 
-        const payload = await readJsonBody(req, res);
-        if (payload === null) return;
-        const { data, encoding = 'text', session_id } = payload;
+        const requestBody = await readJsonBody(req, res);
+        if (requestBody === null) return;
+        const { data, encoding = 'text', session_id } = requestBody;
         if (!data) {
           sendJson(res, 400, { error: 'data is required' });
           return;
@@ -278,11 +278,11 @@ async function main() {
             ? session_id.trim()
             : activeSessionId;
 
-        const payload = encoding === 'hex'
+        const serialPayload = encoding === 'hex'
           ? Buffer.from(escaped.replace(/0x/gi, ''), 'hex')
           : Buffer.from(escaped, 'utf8');
 
-        serialPort.write(payload, (err) => {
+        serialPort.write(serialPayload, (err) => {
           if (err) {
             sendJson(res, 500, { error: err.message });
             return;
@@ -290,19 +290,19 @@ async function main() {
 
           serialPort.drain(() => {
             try {
-              serialDb.insertRow({
-                port: currentPort,
-                timestamp: Date.now(),
-                direction: 'tx',
-                raw: payload,
-                text: payload.toString('utf8'),
-                session_id: effectiveSessionId,
-              });
+                serialDb.insertRow({
+                  port: currentPort,
+                  timestamp: Date.now(),
+                  direction: 'tx',
+                  raw: serialPayload,
+                  text: serialPayload.toString('utf8'),
+                  session_id: effectiveSessionId,
+                });
             } catch (dbErr) {
               console.error(`[${formatTimestamp()}] HTTP /send 写库失败:`, dbErr.message || dbErr);
             }
 
-            sendJson(res, 200, { success: true, bytesSent: payload.length });
+            sendJson(res, 200, { success: true, bytesSent: serialPayload.length });
           });
         });
         return;
