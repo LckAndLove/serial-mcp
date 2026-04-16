@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const { SerialPort } = require('serialport');
 
 // 读取同目录配置文件
@@ -44,6 +45,94 @@ async function main() {
 
   port.on('error', (err) => {
     console.error(`[${formatTimestamp()}] 串口错误:`, err.message || err);
+  });
+
+  // HTTP 服务：转发指令到串口
+  const HTTP_PORT = 7070;
+  const httpServer = http.createServer((req, res) => {
+    // CORS 头
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
+
+    // POST /send
+    if (req.method === 'POST' && url.pathname === '/send') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const { data, encoding = 'text' } = JSON.parse(body);
+          if (!data) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'data is required' }));
+            return;
+          }
+
+          // 写入串口
+          const payload = encoding === 'hex'
+            ? Buffer.from(data.replace(/0x/gi, ''), 'hex')
+            : Buffer.from(data, 'utf8');
+
+          port.write(payload, (err) => {
+            if (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
+              return;
+            }
+
+            port.drain(() => {
+              // 写入数据库 direction=tx
+              try {
+                serialDb.insertRow({
+                  port: portName,
+                  timestamp: Date.now(),
+                  direction: 'tx',
+                  raw: payload,
+                  text: payload.toString('utf8'),
+                  session_id: sessionId
+                });
+              } catch (dbErr) {
+                console.error(`[${formatTimestamp()}] HTTP /send 写库失败:`, dbErr.message);
+              }
+
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, bytesSent: payload.length }));
+            });
+          });
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
+    // GET /status
+    if (req.method === 'GET' && url.pathname === '/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        port: portName,
+        baudRate,
+        isOpen: port.isOpen,
+        sessionId
+      }));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not Found' }));
+  });
+
+  httpServer.listen(HTTP_PORT, () => {
+    console.log(`[${formatTimestamp()}] HTTP 服务已启动: http://localhost:${HTTP_PORT}`);
   });
 
   // 使用 \r\n 分隔解析数据（按配置可覆盖）
