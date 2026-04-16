@@ -99,16 +99,16 @@ try {
     }
   }
 
-  // 3. 打开配置中的串口，波特率 115200
+  // 3. 连接配置中的串口，波特率 115200
   const targetPort = String(mcpConfig?.serial?.port || "").trim();
   if (!targetPort) {
     throw new Error("serial-mcp/config.json 缺少 serial.port 配置");
   }
-  await callTool(client, "open_port", {
+  await callTool(client, "connect_port", {
     port: targetPort,
     baudRate: 115200,
   });
-  console.log(`已打开串口：${targetPort} @ 115200`);
+  console.log(`已连接串口：${targetPort} @ 115200`);
 
   // 4. 创建新会话，记录 session_id
   const sessionStart = new Date().toISOString();
