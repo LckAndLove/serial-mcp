@@ -56,7 +56,9 @@ function logToFile(...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] ${msg}`;
-  fs.appendFile(LOG_FILE, line + "\n", () => {});
+  fs.appendFile(LOG_FILE, line + "\n", (err) => {
+    if (err) process.stderr.write(`[log error] ${err.message}\n`);
+  });
 }
 
 // 封装错误日志写入，同时输出到控制台和日志文件
@@ -64,7 +66,9 @@ function logErrorToFile(...args) {
   const timestamp = new Date().toISOString();
   const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
   const line = `[${timestamp}] ${msg}`;
-  fs.appendFile(LOG_FILE, line + "\n", () => {});
+  fs.appendFile(LOG_FILE, line + "\n", (err) => {
+    if (err) process.stderr.write(`[log error] ${err.message}\n`);
+  });
 }
 
 // 替换 console.log 和 console.error，使其同时写入日志文件
@@ -237,7 +241,7 @@ const tools = [
   },
   {
     name: "send_data",
-    description: "向串口发送数据，写入数据库 direction=tx",
+    description: "向串口发送数据，写入数据库 direction=tx。port 参数仅作记录标记，实际串口由 connect_port 统一管理",
     inputSchema: {
       type: "object",
       properties: {
@@ -245,7 +249,7 @@ const tools = [
         data: { type: "string" },
         encoding: { type: "string", enum: ["text", "hex"] },
       },
-      required: ["port", "data", "encoding"],
+      required: ["data", "encoding"],
       additionalProperties: false,
     },
   },
@@ -465,24 +469,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         // t1: 发送完成时刻，轮询只关注这之后的数据
-        let t1 = Date.now();
+        const t1 = Date.now();
+        let lastTimestamp = t1;
+        let lastId = 0;
         let response = "";
         const stmt = db.prepare(
-          "SELECT id, text, timestamp FROM serial_data WHERE direction='rx' AND timestamp > ? AND session_id = ? ORDER BY id ASC LIMIT 1"
+          `SELECT id, text, timestamp FROM serial_data
+           WHERE direction='rx'
+           AND session_id = ?
+           AND (timestamp > ? OR (timestamp = ? AND id > ?))
+           ORDER BY timestamp ASC, id ASC
+           LIMIT 1`
         );
 
         while (Date.now() - t0 < timeout) {
           await sleep(100);
-          const row = stmt.get(t1, activeSessionId);
+          const row = stmt.get(activeSessionId, lastTimestamp, lastTimestamp, lastId);
 
           if (row) {
+            lastTimestamp = Number(row.timestamp) || lastTimestamp;
+            lastId = Number(row.id) || lastId;
             const text = row.text || "";
             if (mode === "delimiter") {
               if (text.includes(delimiter)) {
                 response = text;
                 break;
               }
-              t1 = Number(row.timestamp) || t1;
               continue;
             }
 

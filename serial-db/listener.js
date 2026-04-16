@@ -36,9 +36,11 @@ function readJsonBody(req, res) {
     req.on('data', (chunk) => {
       body += chunk;
       if (Buffer.byteLength(body, 'utf8') > MAX_BODY_SIZE) {
-        res.writeHead(413);
-        res.end('Request too large');
-        req.destroy();
+        req.pause();
+        req.removeAllListeners('data');
+        req.removeAllListeners('end');
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Request too large' }));
         doneResolve(null);
       }
     });

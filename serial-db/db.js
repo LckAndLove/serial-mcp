@@ -53,6 +53,11 @@ class SerialDB {
       CREATE INDEX IF NOT EXISTS idx_serial_data_timestamp ON serial_data(timestamp);
     `);
 
+    this.db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_serial_data_poll
+      ON serial_data (session_id, direction, timestamp, id)
+    `).run();
+
     // 预编译插入语句
     this.insertStmt = this.db.prepare(`
       INSERT INTO serial_data (port, timestamp, direction, raw, text, session_id)
