@@ -1,0 +1,16 @@
+{
+  "name": "serial-virtual",
+  "version": "1.0.0",
+  "description": "虚拟串口设备与监控工具",
+  "main": "index.js",
+  "dependencies": {
+    "serialport": "^12.0.0"
+  },
+  "scripts": {
+    "device": "node virtual-device.js",
+    "monitor": "node monitor.js"
+  },
+  "keywords": ["serialport", "virtual", "device"],
+  "author": "",
+  "license": "MIT"
+}
