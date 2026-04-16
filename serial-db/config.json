@@ -1,0 +1,12 @@
+{
+  "serial": {
+    "port": "COM11",
+    "baudRate": 115200,
+    "delimiter": "\r\n"
+  },
+  "db": {
+    "path": "./serial.db",
+    "maxRows": 10000,
+    "cleanupInterval": 60000
+  }
+}
