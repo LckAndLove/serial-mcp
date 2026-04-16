@@ -77,12 +77,13 @@ async function main() {
 
   const writeLine = createSerialWriter(port);
   let inputBuffer = '';
+  let timer = null;
 
   port.on('open', () => {
     logWithTimestamp(`虚拟设备已连接 ${portA}，波特率 ${baudRate}`);
 
     // 每秒自动输出传感器数据（带时间戳）
-    setInterval(() => {
+    timer = setInterval(() => {
       writeLine('SENSOR temp=25.3 humidity=60.1\r\n');
     }, autoOutputInterval);
   });
@@ -119,7 +120,18 @@ async function main() {
   });
 
   port.on('error', (err) => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
     logWithTimestamp(`串口错误: ${err.message}`);
+  });
+
+  port.on('close', () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
   });
 
   // 尝试打开串口，失败时列出可用串口
