@@ -1,6 +1,6 @@
 {
   "serial": {
-    "port": "COM11",
+    "port": "COM44",
     "baudRate": 115200
   },
   "db": {
