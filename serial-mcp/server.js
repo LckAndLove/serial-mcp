@@ -511,6 +511,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const delimiter = args.delimiter != null ? String(args.delimiter) : undefined;
         const timeout = Number(args.timeout);
 
+        // 发送指令前的时间戳 t0，用于过滤 rx 数据
+        const t0 = Date.now();
+        console.error(`[send_and_wait] t0=${t0} port=${port} session=${activeSessionId} data=${JSON.stringify(data)}`);
+
         // 通过 HTTP 发送指令，listener 会写入串口并记录 tx
         await httpPost(LISTENER_HTTP, {
           data,
@@ -525,20 +529,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const pollInterval = 50;
         const maxWait = timeout;
 
+        console.error(`[send_and_wait] 开始轮询，timeout=${maxWait}`);
+
         while (Date.now() - startedAt < maxWait) {
           await sleep(pollInterval);
 
+          const sql = `
+            SELECT id, port, direction, data_text, data_hex, session_id, timestamp
+            FROM serial_logs
+            WHERE port = ? AND direction = 'rx' AND session_id = ? AND timestamp > ?
+            ORDER BY id DESC
+            LIMIT 1
+          `;
+
           const rows = db
-            ? db.prepare(`
-                SELECT id, port, direction, data_text, data_hex, session_id, timestamp
-                FROM serial_logs
-                WHERE port = ? AND direction = 'rx' AND session_id = ?
-                ORDER BY id DESC
-                LIMIT 1
-              `).all(port, activeSessionId)
+            ? db.prepare(sql).all(port, activeSessionId, new Date(t0).toISOString())
             : [];
 
+          console.error(`[send_and_wait] poll sql=${sql.replace(/\s+/g, ' ').trim()} params=[${port},${activeSessionId},${new Date(t0).toISOString()}] rows=${rows.length}`);
+
           if (rows.length > 0) {
+            console.error(`[send_and_wait] 收到数据: ${JSON.stringify(rows[0])}`);
             const lastRx = rows[0].data_text || "";
             all = lastRx;
 
@@ -561,6 +572,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // 超时返回
+        console.error(`[send_and_wait] 超时，all=${JSON.stringify(all)}`);
         return jsonResult({
           response: all,
           duration: Date.now() - startedAt,
