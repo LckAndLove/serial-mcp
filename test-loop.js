@@ -132,7 +132,7 @@ try {
   const latestRows = Array.isArray(latestResult?.rows) ? latestResult.rows : [];
   console.log(`最新 5 条（实际 ${latestRows.length} 条）：`);
   for (const row of latestRows) {
-    console.log(`[${row.timestamp}] ${row.data_text ?? ""}`.trimEnd());
+    console.log(`[${row.timestamp}] ${row.text ?? ""}`.trimEnd());
   }
 
   // 7. 发送 GET_STATUS 并打印响应

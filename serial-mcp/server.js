@@ -25,7 +25,7 @@ function loadRuntimeConfig() {
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
-function buildListenerSendUrl(rawUrl) {
+function buildListenerUrl(rawUrl, pathname) {
   const text = typeof rawUrl === "string" ? rawUrl.trim() : "";
   if (!text) {
     throw new Error("config.json 缺少 listener.url 配置");
@@ -36,15 +36,17 @@ function buildListenerSendUrl(rawUrl) {
     throw new Error("listener.url 必须是 http:// 协议");
   }
 
-  if (!endpoint.pathname || endpoint.pathname === "/") {
-    endpoint.pathname = "/send";
-  }
+  endpoint.pathname = pathname;
 
   return endpoint.toString();
 }
 
 const runtimeConfig = loadRuntimeConfig();
-const LISTENER_SEND_URL = buildListenerSendUrl(runtimeConfig.listener?.url);
+const LISTENER_SEND_URL = buildListenerUrl(runtimeConfig.listener?.url, "/send");
+const LISTENER_SESSION_URL = buildListenerUrl(runtimeConfig.listener?.url, "/session");
+const DEFAULT_RESPONSE_TIMEOUT = Number(runtimeConfig.response?.timeout) > 0
+  ? Number(runtimeConfig.response.timeout)
+  : 3000;
 
 // 封装日志写入，同时输出到控制台和日志文件
 function logToFile(...args) {
@@ -112,27 +114,6 @@ function normalizeTimestamp(input) {
   throw new Error("timestamp 格式无效，请传 ISO 时间字符串或毫秒时间戳");
 }
 
-function parseHexToBuffer(text) {
-  // 兼容 AA BB、AABB、0xAA0xBB 等写法
-  const clean = String(text)
-    .replace(/0x/gi, "")
-    .replace(/[^0-9a-fA-F]/g, "");
-
-  if (!clean || clean.length % 2 !== 0) {
-    throw new Error("hex 数据格式无效，必须是偶数字节十六进制");
-  }
-
-  return Buffer.from(clean, "hex");
-}
-
-function toBuffer(data, encoding = "text") {
-  if (encoding === "hex") {
-    return parseHexToBuffer(data);
-  }
-
-  return Buffer.from(String(data), "utf8");
-}
-
 function writeLog({ port, direction, buffer, sessionId }) {
   if (!db || !insertLogStmt) return;
   // 串口收发统一落库，便于后续按端口/会话追溯（better-sqlite3 使用 run 写入）
@@ -144,16 +125,6 @@ function writeLog({ port, direction, buffer, sessionId }) {
     session_id: sessionId ?? activeSessionId,
     timestamp: Date.now(),
   });
-}
-
-function getOpenedPortState(port) {
-  const state = openPorts.get(port);
-
-  if (!state || !state.serialPort?.isOpen) {
-    throw new Error(`串口未打开: ${port}`);
-  }
-
-  return state;
 }
 
 async function openPort(port, baudRate) {
@@ -222,70 +193,6 @@ async function closePort(port) {
 
   state.isOpen = false;
   return { success: true, port };
-}
-
-async function writeAndDrain(serialPort, payload) {
-  await new Promise((resolve, reject) => {
-    serialPort.write(payload, (err) => (err ? reject(err) : resolve()));
-  });
-
-  await new Promise((resolve, reject) => {
-    serialPort.drain((err) => (err ? reject(err) : resolve()));
-  });
-}
-
-function hasDelimiter(buffer, delimiterBuffer) {
-  if (!delimiterBuffer || delimiterBuffer.length === 0) {
-    return false;
-  }
-
-  return buffer.indexOf(delimiterBuffer) >= 0;
-}
-
-async function waitResponse(serialPort, { mode, delimiter, timeout }) {
-  // timeout 模式：等待 timeout 毫秒后返回当前累计数据
-  // delimiter 模式：检测到 delimiter 后立即返回；若超时则返回已收数据
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    let all = Buffer.alloc(0);
-
-    const delimiterBuffer =
-      mode === "delimiter" && typeof delimiter === "string" && delimiter.length > 0
-        ? Buffer.from(delimiter, "utf8")
-        : null;
-
-    const finish = () => {
-      cleanup();
-      resolve({
-        response: all.toString("utf8"),
-        duration: Date.now() - startedAt,
-      });
-    };
-
-    const onData = (chunk) => {
-      all = Buffer.concat([all, Buffer.from(chunk)]);
-
-      if (mode === "delimiter" && delimiterBuffer && hasDelimiter(all, delimiterBuffer)) {
-        finish();
-      }
-    };
-
-    const onError = (err) => {
-      cleanup();
-      reject(err);
-    };
-
-    const timer = setTimeout(finish, Number(timeout) > 0 ? Number(timeout) : 1000);
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      serialPort.off("data", onData);
-      serialPort.off("error", onError);
-    };
-
-    serialPort.on("data", onData);
-    serialPort.on("error", onError);
-  });
 }
 
 function httpPost(urlText, body) {
@@ -406,7 +313,7 @@ const tools = [
   },
   {
     name: "send_and_wait",
-    description: "发送指令并等待响应",
+    description: "发送指令并等待响应（串口由 listener 管理，port 参数仅作标记）",
     inputSchema: {
       type: "object",
       properties: {
@@ -416,7 +323,7 @@ const tools = [
         delimiter: { type: "string" },
         timeout: { type: "integer", minimum: 1 },
       },
-      required: ["port", "data", "mode", "timeout"],
+      required: ["data"],
       additionalProperties: false,
     },
   },
@@ -483,7 +390,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send_data": {
-        const port = String(args.port);
         const data = String(args.data);
         const encoding = String(args.encoding || "text");
 
@@ -559,21 +465,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "send_and_wait": {
         const data = String(args.data);
+        const mode = String(args.mode || "timeout");
+        const delimiter = typeof args.delimiter === "string" ? args.delimiter : "";
         const encoding = String(args.encoding || "text");
-        const timeout = Number(args.timeout);
+        const timeout = Number(args.timeout || DEFAULT_RESPONSE_TIMEOUT);
+
+        if (mode !== "timeout" && mode !== "delimiter") {
+          throw new Error("mode 仅支持 timeout 或 delimiter");
+        }
+
+        if (mode === "delimiter" && !delimiter) {
+          throw new Error("delimiter 模式必须提供 delimiter");
+        }
+
         const t0 = Date.now();
 
         await httpPost(LISTENER_SEND_URL, {
           data,
           encoding,
+          session_id: activeSessionId,
         });
 
         let response = "";
         while (Date.now() - t0 < timeout) {
           await sleep(100);
-          const row = db.prepare(
-            "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? ORDER BY id ASC LIMIT 1"
-          ).get(t0);
+          const row =
+            mode === "delimiter"
+              ? db.prepare(
+                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? AND text LIKE ? ORDER BY id ASC LIMIT 1"
+              ).get(t0, `%${delimiter}%`)
+              : db.prepare(
+                "SELECT text FROM serial_data WHERE direction='rx' AND timestamp > ? ORDER BY id ASC LIMIT 1"
+              ).get(t0);
 
           if (row) {
             response = row.text || "";
@@ -599,7 +522,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "new_session": {
-        activeSessionId = randomUUID();
+        const sessionId = randomUUID();
+
+        await httpPost(LISTENER_SESSION_URL, {
+          session_id: sessionId,
+        });
+
+        activeSessionId = sessionId;
         return jsonResult({ session_id: activeSessionId });
       }
 
