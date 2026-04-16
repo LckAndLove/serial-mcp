@@ -65,22 +65,21 @@ function jsonResult(payload, isError = false) {
 }
 
 function normalizeTimestamp(input) {
-  // 支持 ISO 字符串或毫秒时间戳
+  // 支持 ISO 字符串或毫秒时间戳，统一返回毫秒整数
   if (typeof input === "number") {
-    const date = new Date(input);
-    if (!Number.isNaN(date.getTime())) return date.toISOString();
+    if (Number.isFinite(input)) return Math.trunc(input);
   }
 
   if (typeof input === "string") {
     const value = input.trim();
 
     if (/^\d+$/.test(value)) {
-      const date = new Date(Number(value));
-      if (!Number.isNaN(date.getTime())) return date.toISOString();
+      const ms = Number(value);
+      if (Number.isFinite(ms)) return Math.trunc(ms);
     }
 
     const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return date.toISOString();
+    if (!Number.isNaN(date.getTime())) return date.getTime();
   }
 
   throw new Error("timestamp 格式无效，请传 ISO 时间字符串或毫秒时间戳");
@@ -113,11 +112,10 @@ function writeLog({ port, direction, buffer, sessionId }) {
   insertLogStmt.run({
     port,
     direction,
-    data: buffer.toString("utf8"),
-    data_text: buffer.toString("utf8"),
-    data_hex: buffer.toString("hex"),
+    raw: buffer,
+    text: buffer.toString("utf8"),
     session_id: sessionId ?? activeSessionId,
-    timestamp: new Date().toISOString(),
+    timestamp: Date.now(),
   });
 }
 
@@ -478,15 +476,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sql = sessionId
           ? `
-            SELECT id, port, direction, data_text, data_hex, session_id, timestamp
-            FROM serial_logs
+            SELECT id, port, direction, text, raw, session_id, timestamp
+            FROM serial_data
             WHERE port = ? AND direction = 'rx' AND session_id = ?
             ORDER BY id DESC
             LIMIT ?
           `
           : `
-            SELECT id, port, direction, data_text, data_hex, session_id, timestamp
-            FROM serial_logs
+            SELECT id, port, direction, text, raw, session_id, timestamp
+            FROM serial_data
             WHERE port = ? AND direction = 'rx'
             ORDER BY id DESC
             LIMIT ?
@@ -509,14 +507,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sql = sessionId
           ? `
-            SELECT id, port, direction, data_text, data_hex, session_id, timestamp
-            FROM serial_logs
+            SELECT id, port, direction, text, raw, session_id, timestamp
+            FROM serial_data
             WHERE port = ? AND direction = 'rx' AND timestamp > ? AND session_id = ?
             ORDER BY id ASC
           `
           : `
-            SELECT id, port, direction, data_text, data_hex, session_id, timestamp
-            FROM serial_logs
+            SELECT id, port, direction, text, raw, session_id, timestamp
+            FROM serial_data
             WHERE port = ? AND direction = 'rx' AND timestamp > ?
             ORDER BY id ASC
           `;
@@ -562,22 +560,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           await sleep(pollInterval);
 
           const sql = `
-            SELECT id, port, direction, data_text, data_hex, session_id, timestamp
-            FROM serial_logs
-            WHERE port = ? AND direction = 'rx' AND session_id = ? AND timestamp > ?
+            SELECT id, port, direction, text, raw, session_id, timestamp
+            FROM serial_data
+            WHERE direction = 'rx' AND timestamp > ?
             ORDER BY id DESC
             LIMIT 1
           `;
 
           const rows = db
-            ? db.prepare(sql).all(port, activeSessionId, new Date(t0).toISOString())
+            ? db.prepare(sql).all(t0)
             : [];
 
-          console.error(`[send_and_wait] poll sql=${sql.replace(/\s+/g, ' ').trim()} params=[${port},${activeSessionId},${new Date(t0).toISOString()}] rows=${rows.length}`);
+          console.error(`[send_and_wait] poll sql=${sql.replace(/\s+/g, ' ').trim()} params=[${t0}] rows=${rows.length}`);
 
           if (rows.length > 0) {
             console.error(`[send_and_wait] 收到数据: ${JSON.stringify(rows[0])}`);
-            const lastRx = rows[0].data_text || "";
+            const lastRx = rows[0].text || "";
             all = lastRx;
 
             // delimiter 模式下检测到分隔符就返回
@@ -676,21 +674,20 @@ function initDatabase() {
   db = new Database(dbPath);
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS serial_logs (
+    CREATE TABLE IF NOT EXISTS serial_data (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      port TEXT NOT NULL,
-      direction TEXT NOT NULL CHECK(direction IN ('tx','rx')),
-      data TEXT NOT NULL,
-      data_text TEXT,
-      data_hex TEXT NOT NULL,
+      port TEXT,
+      timestamp INTEGER,
+      direction TEXT,
+      raw BLOB,
+      text TEXT,
       session_id TEXT,
-      timestamp TEXT NOT NULL
     )
   `);
 
   insertLogStmt = db.prepare(`
-    INSERT INTO serial_logs (port, direction, data, data_text, data_hex, session_id, timestamp)
-    VALUES (@port, @direction, @data, @data_text, @data_hex, @session_id, @timestamp)
+    INSERT INTO serial_data (port, direction, raw, text, session_id, timestamp)
+    VALUES (@port, @direction, @raw, @text, @session_id, @timestamp)
   `);
 }
 
