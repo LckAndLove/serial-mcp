@@ -87,7 +87,7 @@ function main() {
 
   const { portA, baudRate, autoOutputInterval } = loadConfig();
 
-  // 2) 根据 config.json 连接 portA（当前配置应为 COM55）
+  // 2) 根据 config.json 连接 portA（当前配置应为 COM2）
   const port = new SerialPort({
     path: portA,
     baudRate,
