@@ -579,7 +579,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             all = lastRx;
 
             // delimiter 模式下检测到分隔符就返回
-            if (mode === "delimiter" && delimiter && all.includes(delimiter)) {
+            if (mode === "delimiter") {
               return jsonResult({
                 response: all,
                 duration: Date.now() - startedAt,
