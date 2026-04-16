@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 
-import initSqlJs from "sql.js";
+import Database from "better-sqlite3";
 import { SerialPort } from "serialport";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -22,9 +22,8 @@ const openPorts = new Map();
 // 当前活动 session_id（调用 new_session 后会更新）
 let activeSessionId = null;
 
-// 数据库相关状态（sql.js 为异步初始化）
+// 数据库相关状态（better-sqlite3 为同步初始化）
 let db = null;
-let dbPath = null;
 let insertLogStmt = null;
 
 function jsonResult(payload, isError = false) {
@@ -80,8 +79,8 @@ function toBuffer(data, encoding = "text") {
 
 function writeLog({ port, direction, buffer, sessionId }) {
   if (!db || !insertLogStmt) return;
-  // 串口收发统一落库，便于后续按端口/会话追溯
-  insertLogStmt.bind({
+  // 串口收发统一落库，便于后续按端口/会话追溯（better-sqlite3 使用 run 写入）
+  insertLogStmt.run({
     port,
     direction,
     data: buffer.toString("utf8"),
@@ -90,8 +89,6 @@ function writeLog({ port, direction, buffer, sessionId }) {
     session_id: sessionId ?? activeSessionId,
     timestamp: new Date().toISOString(),
   });
-  insertLogStmt.step();
-  insertLogStmt.reset();
 }
 
 function getOpenedPortState(port) {
@@ -428,19 +425,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             LIMIT ?
           `;
 
-        let rows = [];
-        if (db) {
-          const stmt = db.prepare(sql);
-          if (sessionId) {
-            stmt.bind([port, sessionId, limit]);
-          } else {
-            stmt.bind([port, limit]);
-          }
-          while (stmt.step()) {
-            rows.push(stmt.getAsObject());
-          }
-          stmt.free();
-        }
+        // 使用 better-sqlite3 的 all() 一次性读取结果集
+        const rows = db
+          ? sessionId
+            ? db.prepare(sql).all(port, sessionId, limit)
+            : db.prepare(sql).all(port, limit)
+          : [];
 
         return jsonResult({ rows, count: rows.length });
       }
@@ -464,19 +454,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ORDER BY id ASC
           `;
 
-        let rows = [];
-        if (db) {
-          const stmt = db.prepare(sql);
-          if (sessionId) {
-            stmt.bind([port, ts, sessionId]);
-          } else {
-            stmt.bind([port, ts]);
-          }
-          while (stmt.step()) {
-            rows.push(stmt.getAsObject());
-          }
-          stmt.free();
-        }
+        // 使用 better-sqlite3 的 all() 一次性读取结果集
+        const rows = db
+          ? sessionId
+            ? db.prepare(sql).all(port, ts, sessionId)
+            : db.prepare(sql).all(port, ts)
+          : [];
 
         return jsonResult({ rows, count: rows.length });
       }
@@ -552,11 +535,9 @@ async function shutdown() {
 
   await Promise.allSettled(closeJobs);
 
-  // 保存数据库到文件
-  if (db && dbPath) {
+  // better-sqlite3 直接基于文件数据库，退出时关闭连接即可
+  if (db) {
     try {
-      const data = db.export();
-      fs.writeFileSync(dbPath, Buffer.from(data));
       db.close();
     } catch {
       // 忽略数据库关闭异常
@@ -564,20 +545,22 @@ async function shutdown() {
   }
 }
 
-async function initDatabase() {
-  const SQL = await initSqlJs();
+function initDatabase() {
+  // 从 config.json 读取数据库路径
   const configPath = path.join(__dirname, "config.json");
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  dbPath = path.resolve(__dirname, config.db?.path || "../serial-db/serial.db");
+  const dbPath = path.resolve(__dirname, config.db?.path || "../serial-db/serial.db");
+  const dbDir = path.dirname(dbPath);
 
-  if (fs.existsSync(dbPath)) {
-    const fileBuffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(fileBuffer);
-  } else {
-    db = new SQL.Database();
+  // 确保数据库目录存在，避免首次启动时报错
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  db.run(`
+  // 同步创建/打开 SQLite 连接
+  db = new Database(dbPath);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS serial_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       port TEXT NOT NULL,
@@ -607,7 +590,7 @@ process.on("SIGTERM", async () => {
 });
 
 async function main() {
-  await initDatabase();
+  initDatabase();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

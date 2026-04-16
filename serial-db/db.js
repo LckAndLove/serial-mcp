@@ -1,18 +1,40 @@
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 
 /**
- * 串口数据 SQLite 封装
- * - 默认数据库文件：当前目录下 serial_data.db
- * - 初始化时自动创建 serial_data 表
+ * 读取同目录 config.json 中的 db.path
+ * 如果未配置则默认使用 ./serial.db
+ */
+function resolveDbPath() {
+  const configPath = path.join(__dirname, 'config.json');
+  let dbPath = './serial.db';
+
+  try {
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      dbPath = config?.db?.path || dbPath;
+    }
+  } catch (_) {
+    // 配置读取失败时使用默认路径，避免启动中断
+  }
+
+  return path.resolve(__dirname, dbPath);
+}
+
+/**
+ * 串口数据数据库封装
  */
 class SerialDB {
-  constructor(dbPath = path.join(__dirname, 'serial_data.db')) {
-    // 打开数据库连接；better-sqlite3 为同步 API，适合本地高频小数据写入
+  constructor(dbPath = resolveDbPath()) {
+    // 打开数据库连接
     this.db = new Database(dbPath);
 
-    // 创建表（若不存在）
+    // 开启 WAL 模式，提高并发读写性能
+    this.db.pragma('journal_mode = WAL');
+
+    // 初始化数据表
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS serial_data (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,13 +47,13 @@ class SerialDB {
       );
     `);
 
-    // 可选索引：提升按 session_id 与时间范围查询性能
+    // 为常用查询字段建立索引
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_serial_data_session_id ON serial_data(session_id);
       CREATE INDEX IF NOT EXISTS idx_serial_data_timestamp ON serial_data(timestamp);
     `);
 
-    // 预编译插入语句，避免重复解析 SQL
+    // 预编译插入语句
     this.insertStmt = this.db.prepare(`
       INSERT INTO serial_data (port, timestamp, direction, raw, text, session_id)
       VALUES (@port, @timestamp, @direction, @raw, @text, @session_id)
@@ -39,113 +61,104 @@ class SerialDB {
   }
 
   /**
-   * 插入一行串口数据
-   * @param {Object} data
-   * @param {string} data.port
-   * @param {number} data.timestamp 毫秒时间戳
-   * @param {'rx'|'tx'|string} data.direction
-   * @param {Buffer|Uint8Array|null} data.raw 原始字节数据
-   * @param {string|null} data.text 文本解析结果
-   * @param {string} data.session_id
-   * @returns {{id:number, changes:number}}
+   * 插入一行数据
+   * data 字段：port, timestamp, direction, raw, text, session_id
    */
-  insertRow(data) {
+  insertRow(data = {}) {
     const row = {
-      port: data?.port ?? null,
-      timestamp: data?.timestamp ?? Date.now(),
-      direction: data?.direction ?? null,
-      raw: data?.raw ?? null,
-      text: data?.text ?? null,
-      session_id: data?.session_id ?? null
+      port: data.port ?? null,
+      timestamp: data.timestamp ?? Date.now(),
+      direction: data.direction ?? null,
+      raw: data.raw ?? null,
+      text: data.text ?? null,
+      session_id: data.session_id ?? null
     };
 
     const result = this.insertStmt.run(row);
-    return { id: Number(result.lastInsertRowid), changes: result.changes };
+    return {
+      id: Number(result.lastInsertRowid),
+      changes: result.changes
+    };
   }
 
   /**
    * 查询数据
-   * @param {Object} [options]
-   * @param {string} [options.session_id] 会话 ID 过滤
-   * @param {number} [options.startTimestamp] 起始毫秒时间戳（包含）
-   * @param {number} [options.endTimestamp] 结束毫秒时间戳（包含）
-   * @param {number} [options.limit] 返回条数上限
-   * @returns {Array}
+   * 支持：
+   * - session_id
+   * - timestamp 范围（timestampStart/timestampEnd 或 startTimestamp/endTimestamp）
+   * - limit
    */
   queryRows(options = {}) {
     const where = [];
     const params = {};
 
-    // 按会话过滤
     if (options.session_id != null) {
       where.push('session_id = @session_id');
       params.session_id = options.session_id;
     }
 
-    // 按时间范围过滤（毫秒时间戳）
-    if (options.startTimestamp != null) {
-      where.push('timestamp >= @startTimestamp');
-      params.startTimestamp = options.startTimestamp;
+    const timestampStart = options.timestampStart ?? options.startTimestamp;
+    const timestampEnd = options.timestampEnd ?? options.endTimestamp;
+
+    if (timestampStart != null) {
+      where.push('timestamp >= @timestampStart');
+      params.timestampStart = Number(timestampStart);
     }
-    if (options.endTimestamp != null) {
-      where.push('timestamp <= @endTimestamp');
-      params.endTimestamp = options.endTimestamp;
+    if (timestampEnd != null) {
+      where.push('timestamp <= @timestampEnd');
+      params.timestampEnd = Number(timestampEnd);
     }
 
     let sql = 'SELECT id, port, timestamp, direction, raw, text, session_id FROM serial_data';
-    if (where.length > 0) {
+    if (where.length) {
       sql += ` WHERE ${where.join(' AND ')}`;
     }
-
-    // 默认按时间倒序、id 倒序返回最新数据
     sql += ' ORDER BY timestamp DESC, id DESC';
 
     if (options.limit != null) {
       sql += ' LIMIT @limit';
-      params.limit = Number(options.limit);
+      params.limit = Math.max(0, Number(options.limit) || 0);
     }
 
     return this.db.prepare(sql).all(params);
   }
 
   /**
-   * 删除最老数据，最多保留 maxRows 条
-   * @param {number} maxRows
-   * @returns {number} 实际删除条数
+   * 删除最老数据，保留最多 maxRows 条
    */
   cleanup(maxRows) {
     const keep = Number(maxRows);
     if (!Number.isFinite(keep) || keep < 0) {
-      throw new Error('cleanup(maxRows) 参数无效，maxRows 必须是 >= 0 的数字');
+      throw new Error('maxRows 必须是大于等于 0 的数字');
     }
 
     const total = this.db.prepare('SELECT COUNT(*) AS c FROM serial_data').get().c;
     const toDelete = total - keep;
-    if (toDelete <= 0) return 0;
+    if (toDelete <= 0) {
+      return 0;
+    }
 
-    // 删除最老的 N 条（按 timestamp、id 升序）
     const result = this.db.prepare(`
       DELETE FROM serial_data
       WHERE id IN (
         SELECT id FROM serial_data
         ORDER BY timestamp ASC, id ASC
-        LIMIT ?
+        LIMIT @toDelete
       )
-    `).run(toDelete);
+    `).run({ toDelete });
 
     return result.changes;
   }
 
   /**
-   * 生成新的会话 ID（UUID v4）
-   * @returns {string}
+   * 创建新的会话 ID（UUID v4）
    */
   newSession() {
     return crypto.randomUUID();
   }
 
   /**
-   * 关闭数据库连接
+   * 关闭数据库
    */
   close() {
     this.db.close();

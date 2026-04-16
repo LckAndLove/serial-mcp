@@ -1,8 +1,8 @@
 {
   "name": "serial-db",
   "dependencies": {
-    "serialport": "*",
-    "better-sqlite3": "*"
+    "better-sqlite3": "^12.9.0",
+    "serialport": "*"
   },
   "scripts": {
     "start": "node listener.js"
