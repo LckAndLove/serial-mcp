@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { SerialPort } = require('serialport');
+const lockFile = path.resolve(__dirname, 'listener.lock');
 
 // 读取同目录配置文件
 const configPath = path.join(__dirname, 'config.json');
@@ -81,6 +82,22 @@ async function main() {
     process.exit(1);
     return;
   }
+
+  fs.writeFileSync(lockFile, String(process.pid));
+  const cleanupLock = () => {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {}
+  };
+  process.on('exit', cleanupLock);
+  process.on('SIGINT', () => {
+    cleanupLock();
+    process.exit();
+  });
+  process.on('SIGTERM', () => {
+    cleanupLock();
+    process.exit();
+  });
 
   const serialDb = new SerialDB(dbPath);
 

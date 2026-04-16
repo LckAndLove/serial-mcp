@@ -8,3 +8,5 @@ node_modules
 # SQLite 临时文件
 *.db-shm
 *.db-wal
+serial-db/listener.lock
+serial-mcp/mcp.log

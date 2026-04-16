@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
@@ -80,6 +81,7 @@ console.error = (...args) => { originalConsoleError(...args); logErrorToFile(...
 // 按端口维护会话：port -> sessionId
 const sessionMap = new Map();
 let portSnapshot = null;
+let listenerChild = null;
 
 // 数据库相关状态（better-sqlite3 为同步初始化）
 let db = null;
@@ -219,6 +221,66 @@ function httpGet(urlText) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForListener(maxWait = 10000, interval = 500) {
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    await sleep(interval);
+    try {
+      await httpGet(LISTENER_STATUS_URL);
+      console.error("[serial-mcp] listener 已就绪");
+      return;
+    } catch {
+      // keep waiting
+    }
+  }
+  console.error("[serial-mcp] listener 启动超时，请手动检查");
+}
+
+async function ensureListener() {
+  try {
+    await httpGet(LISTENER_STATUS_URL);
+    console.log("[serial-mcp] listener 已在运行");
+    return;
+  } catch {
+    // continue
+  }
+
+  const lockFile = path.resolve(__dirname, "../serial-db/listener.lock");
+  if (fs.existsSync(lockFile)) {
+    const rawPid = fs.readFileSync(lockFile, "utf8").trim();
+    const pid = Number.parseInt(rawPid, 10);
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+        await waitForListener();
+        return;
+      } catch {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {
+          // ignore stale lock cleanup errors
+        }
+      }
+    } else {
+      try {
+        fs.unlinkSync(lockFile);
+      } catch {
+        // ignore malformed lock cleanup errors
+      }
+    }
+  }
+
+  console.error("[serial-mcp] listener 未检测到，正在自动启动...");
+  const listenerPath = path.resolve(__dirname, "../serial-db/listener.js");
+  listenerChild = spawn(process.execPath, [listenerPath], {
+    detached: false,
+    stdio: "ignore",
+    cwd: path.resolve(__dirname, "../serial-db"),
+  });
+  listenerChild.unref();
+  await waitForListener();
 }
 
 function findConnectedPort(status, port) {
@@ -781,17 +843,42 @@ function initDatabase() {
 }
 
 process.on("SIGINT", async () => {
+  if (listenerChild) {
+    try {
+      listenerChild.kill();
+    } catch {
+      // ignore child kill errors
+    }
+  }
   await shutdown();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
+  if (listenerChild) {
+    try {
+      listenerChild.kill();
+    } catch {
+      // ignore child kill errors
+    }
+  }
   await shutdown();
   process.exit(0);
 });
 
+process.on("exit", () => {
+  if (listenerChild) {
+    try {
+      listenerChild.kill();
+    } catch {
+      // ignore child kill errors
+    }
+  }
+});
+
 async function main() {
   initDatabase();
+  await ensureListener();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
