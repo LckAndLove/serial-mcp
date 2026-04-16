@@ -8,5 +8,8 @@
     "path": "./serial.db",
     "maxRows": 10000,
     "cleanupInterval": 60000
+  },
+  "http": {
+    "port": 7070
   }
 }
