@@ -76,10 +76,13 @@ async function main() {
             return;
           }
 
+          // 转义 \r\n 为真实回车换行符
+          const escaped = data.replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+
           // 写入串口
           const payload = encoding === 'hex'
-            ? Buffer.from(data.replace(/0x/gi, ''), 'hex')
-            : Buffer.from(data, 'utf8');
+            ? Buffer.from(escaped.replace(/0x/gi, ''), 'hex')
+            : Buffer.from(escaped, 'utf8');
 
           port.write(payload, (err) => {
             if (err) {
