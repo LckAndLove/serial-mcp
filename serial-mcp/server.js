@@ -15,9 +15,36 @@ import {
 
 const LISTENER_HTTP = "localhost:7070";
 
+// 日志文件路径
+const LOG_FILE = path.join(__dirname, "mcp.log");
+
 // 解析当前文件目录，用于放置本地 SQLite 数据库文件
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 封装日志写入，同时输出到控制台和日志文件
+function logToFile(...args) {
+  const timestamp = new Date().toISOString();
+  const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
+  const line = `[${timestamp}] ${msg}`;
+  console.log(...args); // 保留原控制台输出
+  fs.appendFileSync(LOG_FILE, line + "\n");
+}
+
+// 封装错误日志写入，同时输出到控制台和日志文件
+function logErrorToFile(...args) {
+  const timestamp = new Date().toISOString();
+  const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
+  const line = `[${timestamp}] ${msg}`;
+  console.error(...args); // 保留原控制台输出
+  fs.appendFileSync(LOG_FILE, line + "\n");
+}
+
+// 替换 console.log 和 console.error，使其同时写入日志文件
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+console.log = (...args) => { originalConsoleLog(...args); logToFile(...args); };
+console.error = (...args) => { originalConsoleError(...args); logErrorToFile(...args); };
 
 // 已打开串口状态映射：key=端口路径，value=状态对象
 const openPorts = new Map();
