@@ -298,18 +298,18 @@ async function ensureListener() {
   const isPkg = typeof process.pkg !== "undefined";
   const listenerPath = isPkg
     ? path.join(path.dirname(process.execPath), "serial-db-listener")
-    : fileURLToPath(new URL("../serial-db/listener.js", import.meta.url));
+    : fileURLToPath(new URL("./lib/listener.js", import.meta.url));
   const listenerArgs = isPkg
     ? []
     : [listenerPath];
   const listenerCmd = isPkg
     ? listenerPath
-    : process.execPath;
+    : "node";
 
   listenerChild = spawn(listenerCmd, listenerArgs, {
-    detached: false,
+    detached: true,
     stdio: "ignore",
-    cwd: path.resolve(__dirname, "../serial-db"),
+    cwd: path.dirname(listenerPath),
   });
   listenerChild.unref();
   await waitForListener();
