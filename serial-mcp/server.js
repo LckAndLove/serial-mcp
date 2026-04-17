@@ -813,19 +813,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? args.port.trim()
           : null;
         const baudRate = Number(args.baudRate || 115200);
-        const isPkg = typeof process.pkg !== "undefined";
         const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
-        const monitorExe = isPkg
-          ? path.join(path.dirname(process.execPath), "serial-monitor.exe")
-          : monitorPath;
-        const cmd = isPkg
-          ? `"${monitorExe}" ${port || ""} ${baudRate}`
-          : `node "${monitorExe}" ${port || ""} ${baudRate}`;
+        const nodeExe = process.execPath;
+        const psCmd = `Start-Process cmd -ArgumentList '/k "${nodeExe}" "${monitorPath}" ${port || ""} ${baudRate}'`;
 
         spawn("powershell.exe", [
           "-NoProfile",
+          "-NonInteractive",
           "-Command",
-          `Start-Process ${isPkg ? "" : "cmd"} -ArgumentList '${isPkg ? "" : "/k "}${cmd}'`
+          psCmd
         ], { detached: true, stdio: "ignore" }).unref();
 
         return okResult({
