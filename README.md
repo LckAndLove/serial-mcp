@@ -62,7 +62,7 @@ serial-mcp/
 ├── serial-mcp/         MCP Server
 ├── start-all.bat       一键启动
 ├── stop-all.bat        一键停止
-└── .mcp.json           Claude Code MCP 配置
+└── docs/               项目文档
 ```
 
 ## 依赖
@@ -73,12 +73,26 @@ serial-mcp/
 
 ## 安装
 
-### Claude Code
+### Windows
+
+#### Claude Code（用户级别，所有项目可用）
 ```bash
-claude mcp add serial -- npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
 ```
 
-### Codex CLI
+#### Codex CLI
+```bash
+codex mcp add serial -- npx -y @lckandyou/serial-mcp
+```
+
+### Mac/Linux
+
+#### Claude Code
+```bash
+claude mcp add -s user serial -- npx -y @lckandyou/serial-mcp
+```
+
+#### Codex CLI
 ```bash
 codex mcp add serial -- npx -y @lckandyou/serial-mcp
 ```
@@ -94,8 +108,17 @@ codex mcp list
 
 看到 serial 状态为 connected 即成功。
 
+### 卸载
+```bash
+# Claude Code
+claude mcp remove -s user serial
+
+# Codex CLI
+codex mcp remove serial
+```
+
 ## 使用方式
-安装完成后，直接告诉 AI 你的串口信息：
+连接好设备后，直接告诉 AI：
 "我的设备接在 COM5，波特率 115200，帮我连接并开始调试"
 
 AI 会自动完成连接，无需任何额外配置。
@@ -116,11 +139,11 @@ AI 会自动完成连接，无需任何额外配置。
 
 ## 真实硬件接入
 
-1. 停止运行 `serial-virtual`
-2. 把 `serial-db/config.json` 的 `port` 改为实际串口号
-3. 重启 `serial-db`
+1. 连接好真实设备到电脑
+2. 在 AI 中执行串口扫描并连接目标端口
+3. 直接开始发送/接收调试数据
 
-无需修改 MCP Server，AI 调试方式完全一致。
+无需手动修改任何配置文件，AI 调试方式完全一致。
 
 ## FAQ
 

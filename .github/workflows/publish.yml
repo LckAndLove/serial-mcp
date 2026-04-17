@@ -35,7 +35,7 @@ jobs:
 
             ### Claude Code
             ```bash
-            claude mcp add serial -- cmd /c npx -y @lckandyou/serial-mcp
+            claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
             ```
 
             ### Codex CLI
