@@ -8,24 +8,24 @@
 
 #### Claude Code（用户级别，所有项目可用）
 ```bash
-claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- cmd /c npx -y serial-mcp
 ```
 
 #### Codex CLI
 ```bash
-codex mcp add serial -- npx -y @lckandyou/serial-mcp
+codex mcp add serial -- npx -y serial-mcp
 ```
 
 ### Mac/Linux
 
 #### Claude Code
 ```bash
-claude mcp add -s user serial -- npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- npx -y serial-mcp
 ```
 
 #### Codex CLI
 ```bash
-codex mcp add serial -- npx -y @lckandyou/serial-mcp
+codex mcp add serial -- npx -y serial-mcp
 ```
 
 ## 验证安装
@@ -53,3 +53,4 @@ codex mcp remove serial
 连接好设备后，直接告诉 AI：
 
 `我的设备接在 COM5，波特率 115200，帮我连接并开始调试`
+

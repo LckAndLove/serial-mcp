@@ -27,8 +27,8 @@
 ## [v2.0.0] - 2026-04-17
 ### 新增
 - 发布到 npm，支持 npx 一键使用
-- Claude Code：claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
-- Codex CLI：codex mcp add serial -- npx -y @lckandyou/serial-mcp
+- Claude Code：claude mcp add -s user serial -- cmd /c npx -y serial-mcp
+- Codex CLI：codex mcp add serial -- npx -y serial-mcp
 
 ## [v1.5.0] - 2026-04-16
 ### 新增
@@ -129,3 +129,4 @@
 - [ ] 定时发送功能
 - [ ] Web 监控面板：浏览器实时查看串口数据
 - [ ] 串口 idle 自动释放
+

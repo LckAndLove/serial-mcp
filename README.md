@@ -77,24 +77,24 @@ serial-mcp/
 
 #### Claude Code（用户级别，所有项目可用）
 ```bash
-claude mcp add -s user serial -- cmd /c npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- cmd /c npx -y serial-mcp
 ```
 
 #### Codex CLI
 ```bash
-codex mcp add serial -- npx -y @lckandyou/serial-mcp
+codex mcp add serial -- npx -y serial-mcp
 ```
 
 ### Mac/Linux
 
 #### Claude Code
 ```bash
-claude mcp add -s user serial -- npx -y @lckandyou/serial-mcp
+claude mcp add -s user serial -- npx -y serial-mcp
 ```
 
 #### Codex CLI
 ```bash
-codex mcp add serial -- npx -y @lckandyou/serial-mcp
+codex mcp add serial -- npx -y serial-mcp
 ```
 
 ### 验证是否安装成功
@@ -162,3 +162,4 @@ A: 烧录完成后调用 `new_session` 创建新会话，后续用 `session_id` 
 ## License
 
 MIT
+
