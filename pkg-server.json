@@ -1,0 +1,9 @@
+{
+  "pkg": {
+    "assets": [
+      "serial-db/**/*",
+      "serial-mcp/**/*"
+    ],
+    "targets": ["node18-win-x64"]
+  }
+}

@@ -5,6 +5,7 @@ node_modules/
 serial-db/serial.db
 serial-db/serial.db-shm
 serial-db/serial.db-wal
+dist/
 
 # Claude 本地设置
 .claude/

@@ -1,0 +1,11 @@
+{
+  "pkg": {
+    "assets": [
+      "serial-mcp/monitor-window.js",
+      "node_modules/ink/**/*",
+      "node_modules/react/**/*",
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "targets": ["node18-win-x64"]
+  }
+}

@@ -290,8 +290,18 @@ async function ensureListener() {
   }
 
   logInfo("[serial-mcp] listener 未检测到，正在自动启动...");
-  const listenerPath = path.resolve(__dirname, "../serial-db/listener.js");
-  listenerChild = spawn(process.execPath, [listenerPath], {
+  const isPkg = typeof process.pkg !== "undefined";
+  const listenerPath = isPkg
+    ? path.join(path.dirname(process.execPath), "serial-db-listener")
+    : path.resolve(__dirname, "../serial-db/listener.js");
+  const listenerArgs = isPkg
+    ? []
+    : [listenerPath];
+  const listenerCmd = isPkg
+    ? listenerPath
+    : process.execPath;
+
+  listenerChild = spawn(listenerCmd, listenerArgs, {
     detached: false,
     stdio: "ignore",
     cwd: path.resolve(__dirname, "../serial-db"),
@@ -798,19 +808,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? args.port.trim()
           : null;
         const baudRate = Number(args.baudRate || 115200);
-        const monitorWindowPath = path.resolve(__dirname, "monitor-window.js");
-        const monitorArgs = ["/c", "start", "", "cmd", "/k", "node", monitorWindowPath];
+        const isPkg = typeof process.pkg !== "undefined";
+        const monitorExe = isPkg
+          ? path.join(path.dirname(process.execPath), "serial-monitor.exe")
+          : path.resolve(__dirname, "monitor-window.js");
+        const cmd = isPkg
+          ? `"${monitorExe}" ${port || ""} ${baudRate}`
+          : `node "${monitorExe}" ${port || ""} ${baudRate}`;
 
-        if (port) {
-          monitorArgs.push(port);
-        }
-
-        monitorArgs.push(String(baudRate));
-
-        spawn("cmd.exe", monitorArgs, {
-          stdio: "ignore",
-          windowsHide: false,
-        });
+        spawn("powershell.exe", [
+          "-NoProfile",
+          "-Command",
+          `Start-Process ${isPkg ? "" : "cmd"} -ArgumentList '${isPkg ? "" : "/k "}${cmd}'`
+        ], { detached: true, stdio: "ignore" }).unref();
 
         return okResult({
           success: true,
