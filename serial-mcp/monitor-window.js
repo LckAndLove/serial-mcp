@@ -120,6 +120,28 @@ function Monitor() {
   };
 
   useEffect(() => {
+    if (process.stdin.isTTY) {
+      try {
+        process.stdin.setRawMode(true);
+      } catch {
+        // ignore raw mode setup errors
+      }
+    }
+
+    process.stdin.resume();
+
+    return () => {
+      if (process.stdin.isTTY) {
+        try {
+          process.stdin.setRawMode(false);
+        } catch {
+          // ignore raw mode reset errors
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const db = new Database(dbPath);
     dbRef.current = db;
 
@@ -416,4 +438,8 @@ function Monitor() {
   );
 }
 
-render(h(Monitor), { exitOnCtrlC: false });
+render(h(Monitor), {
+  stdin: process.stdin,
+  stdout: process.stdout,
+  exitOnCtrlC: false
+});
