@@ -816,15 +816,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
         const monitorPathFwd = monitorPath.replace(/\\/g, "/");
         const portArg = port ? ` ${port}` : "";
-        const psCmd = `Start-Process cmd -ArgumentList "/k node \`"${monitorPathFwd}\`"${portArg}"`;
-        console.error("[open_monitor] psCmd:", psCmd);
+        const baudArg = Number.isFinite(baudRate) ? ` ${baudRate}` : "";
+        const batContent = `@echo off\nnode "${monitorPathFwd}"${portArg}${baudArg}\npause`;
+        const batPath = path.join(os.tmpdir(), `serial-monitor-${Date.now()}.bat`);
+        fs.writeFileSync(batPath, batContent, "utf8");
 
-        spawn("powershell.exe", [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          psCmd
-        ], { detached: true, stdio: "ignore" }).unref();
+        spawn("explorer.exe", [batPath], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
 
         return okResult({
           success: true,
