@@ -5,6 +5,8 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^11.10.0",
     "blessed": "^0.1.81",
+    "ink": "^7.0.0",
+    "react": "^19.2.5",
     "serialport": "^13.0.0"
   },
   "scripts": {
