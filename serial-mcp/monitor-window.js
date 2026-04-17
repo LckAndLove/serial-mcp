@@ -75,6 +75,13 @@ function ensureTextFrame(data) {
   return `${data}\r\n`;
 }
 
+function formatDisplayText(value) {
+  return String(value ?? '')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
+}
+
 function Monitor() {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -91,19 +98,35 @@ function Monitor() {
   const timersRef = useRef(new Map());
   const nextIdRef = useRef(1);
   const lastIdRef = useRef(0);
+  const msgSeqRef = useRef(1);
 
-  const addLog = (entry) => {
+  const mapDbEntry = (entry) => {
     const d = new Date(entry.timestamp);
     const time = d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    return {
+      ...entry,
+      key: `db-${entry.id}`,
+      time,
+      text: formatDisplayText(entry.text)
+    };
+  };
+
+  const pushDbRows = (rows) => {
+    if (!rows || rows.length === 0) {
+      return;
+    }
+
+    const mapped = rows.map(mapDbEntry);
     setLogs((prev) => {
-      const next = [...prev, { ...entry, time }];
+      const next = [...prev, ...mapped];
       return next.length > MAX_LOGS ? next.slice(-MAX_LOGS) : next;
     });
   };
 
   const addMsg = (text, color = 'gray') => {
+    const key = `msg-${Date.now()}-${msgSeqRef.current++}`;
     setLogs((prev) => {
-      const next = [...prev, { type: 'msg', text, color }];
+      const next = [...prev, { key, type: 'msg', text: formatDisplayText(text), color }];
       return next.length > MAX_LOGS ? next.slice(-MAX_LOGS) : next;
     });
   };
@@ -162,7 +185,7 @@ function Monitor() {
 
     if (history.length > 0) {
       lastIdRef.current = history[history.length - 1].id;
-      history.forEach(addLog);
+      pushDbRows(history);
     }
 
     const stmt = db.prepare(
@@ -172,10 +195,10 @@ function Monitor() {
     pollRef.current = setInterval(() => {
       try {
         const rows = stmt.all(portName, lastIdRef.current);
-        rows.forEach((row) => {
-          lastIdRef.current = row.id;
-          addLog(row);
-        });
+        if (rows.length > 0) {
+          lastIdRef.current = rows[rows.length - 1].id;
+          pushDbRows(rows);
+        }
       } catch (err) {
         addMsg(`✗ 读取数据库失败：${err.message}`, 'red');
       }
@@ -367,14 +390,14 @@ function Monitor() {
 
   const logRows = visibleLogs.map((entry, i) => {
     if (entry.type === 'msg') {
-      return h(Text, { key: i, color: entry.color || 'gray' }, entry.text);
+      return h(Text, { key: entry.key || `msg-${i}`, color: entry.color || 'gray' }, entry.text);
     }
 
     const isHex = entry.text?.startsWith('[HEX]');
     if (entry.direction === 'tx') {
       return h(
         Text,
-        { key: i },
+        { key: entry.key || `tx-${i}` },
         h(Text, { color: 'gray' }, `${entry.time}  `),
         h(Text, { color: 'yellow' }, '▶  '),
         h(Text, { color: 'white' }, entry.text)
@@ -383,7 +406,7 @@ function Monitor() {
 
     return h(
       Text,
-      { key: i },
+      { key: entry.key || `rx-${i}` },
       h(Text, { color: 'gray' }, `${entry.time}  `),
       h(Text, { color: isHex ? 'cyan' : 'green' }, '◀  '),
       h(Text, { color: isHex ? 'cyan' : 'green' }, entry.text)
