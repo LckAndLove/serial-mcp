@@ -12,6 +12,7 @@ const DATA_DIR = path.join(os.homedir(), '.serial-mcp');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'serial.db');
 const LOCK_FILE = path.join(DATA_DIR, 'listener.lock');
+const READY_FILE = path.join(DATA_DIR, 'listener.ready');
 
 let config = {};
 try {
@@ -91,18 +92,29 @@ async function main() {
   const HTTP_PORT = Number(config?.http?.port || 7070);
 
   fs.writeFileSync(LOCK_FILE, String(process.pid));
+  try {
+    fs.unlinkSync(READY_FILE);
+  } catch {}
   const cleanupLock = () => {
     try {
       fs.unlinkSync(LOCK_FILE);
     } catch {}
   };
+  const cleanupReady = () => {
+    try {
+      fs.unlinkSync(READY_FILE);
+    } catch {}
+  };
   process.on('exit', cleanupLock);
+  process.on('exit', cleanupReady);
   process.on('SIGINT', () => {
     cleanupLock();
+    cleanupReady();
     process.exit();
   });
   process.on('SIGTERM', () => {
     cleanupLock();
+    cleanupReady();
     process.exit();
   });
 
@@ -476,6 +488,9 @@ async function main() {
   });
 
   httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
+    try {
+      fs.writeFileSync(READY_FILE, String(Date.now()));
+    } catch {}
     logInfo(`[${formatTimestamp()}] HTTP 服务已启动: http://127.0.0.1:${HTTP_PORT}，等待连接串口...`);
   });
 
