@@ -815,6 +815,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           monitorArgs.push(port);
         }
 
+        monitorArgs.push(String(baudRate));
+
         spawn("cmd.exe", monitorArgs, {
           stdio: "ignore",
           windowsHide: false,
