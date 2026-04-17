@@ -4,6 +4,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^11.10.0",
+    "blessed": "^0.1.81",
     "serialport": "^13.0.0"
   },
   "scripts": {
