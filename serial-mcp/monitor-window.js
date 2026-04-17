@@ -110,6 +110,51 @@ function formatDisplayText(value) {
     .replace(/\t/g, '\\t');
 }
 
+function charWidth(ch) {
+  const cp = ch.codePointAt(0);
+  if (!cp) return 0;
+
+  if (
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2329 && cp <= 0x232a) ||
+    (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe19) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6)
+  ) {
+    return 2;
+  }
+
+  return 1;
+}
+
+function textWidth(str) {
+  let width = 0;
+  for (const ch of String(str ?? '')) {
+    width += charWidth(ch);
+  }
+  return width;
+}
+
+function sliceEndByWidth(str, maxWidth) {
+  if (maxWidth <= 0) return '';
+  const chars = Array.from(String(str ?? ''));
+  let used = 0;
+  const out = [];
+
+  for (let i = chars.length - 1; i >= 0; i -= 1) {
+    const w = charWidth(chars[i]);
+    if (used + w > maxWidth) break;
+    out.push(chars[i]);
+    used += w;
+  }
+
+  return out.reverse().join('');
+}
+
 function Monitor() {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -453,9 +498,14 @@ function Monitor() {
   const hintStart = Math.min(Math.max(0, hintIndex - (MAX_HINT_VISIBLE - 1)), maxHintStart);
   const visibleHints = hints.slice(hintStart, hintStart + MAX_HINT_VISIBLE);
   const hintHeight = visibleHintCount > 0 ? visibleHintCount + 1 : 0;
-  const logHeight = Math.max(5, termHeight - 3 - hintHeight);
+  const logHeight = Math.max(5, termHeight - 5 - hintHeight);
   const visibleLogs = useMemo(() => logs.slice(-Math.max(1, logHeight)), [logs, logHeight]);
   const separator = '─'.repeat(Math.max(10, termWidth));
+  const rightCorner = `${baudRate} baud`;
+  const promptPrefix = `${portName} [${mode}${autoEol ? ',eol' : ''}] ❯ `;
+  const inputRoom = Math.max(0, termWidth - textWidth(promptPrefix) - 1);
+  const inputPreview = sliceEndByWidth(input, inputRoom);
+  const rightPad = Math.max(0, termWidth - textWidth(rightCorner));
 
   const logRows = visibleLogs.map((entry, i) => {
     if (entry.type === 'msg') {
@@ -518,11 +568,12 @@ function Monitor() {
       ...logRows
     ),
     h(Text, { color: 'gray' }, separator),
+    h(Text, { color: 'gray' }, `${' '.repeat(rightPad)}${rightCorner}`),
     h(
       Text,
       null,
-      h(Text, { color: CLAUDE_ACCENT, bold: true }, `${portName} [${mode}${autoEol ? ',eol' : ''}] ❯ `),
-      h(Text, { color: 'white' }, input),
+      h(Text, { color: CLAUDE_ACCENT, bold: true }, promptPrefix),
+      h(Text, { color: 'white' }, inputPreview),
       h(Text, { color: 'white', bold: true }, '█')
     ),
     visibleHintCount > 0
