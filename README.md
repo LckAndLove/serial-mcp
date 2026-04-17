@@ -71,80 +71,34 @@ serial-mcp/
 - Windows 系统
 - 虚拟串口驱动（开发调试用）：[ELTIMA VSP](https://www.eltima.com/products/vspdxp/) 或 [com0com](https://com0com.sourceforge.net)
 
-## 快速开始
+## 安装
 
-### 方式一：直接使用 exe（推荐）
-
-1. 从 Releases 页面下载 `serial-mcp-server.exe` 和 `serial-monitor.exe`
-2. 放到同一个目录，比如 `C:\serial-mcp\`
-3. 配置 Claude Code 的 `.mcp.json`：
-
-```json
-{
-  "mcpServers": {
-    "serial": {
-      "command": "C:\\serial-mcp\\serial-mcp-server.exe"
-    }
-  }
-}
+### Claude Code
+```bash
+claude mcp add serial -- npx -y @lckandyou/serial-mcp
 ```
 
-4. 重启 Claude Code，告诉 AI 你的串口信息开始调试
-
-### 方式二：从源码运行
-
-### 1. 克隆项目
-
+### Codex CLI
 ```bash
-git clone https://github.com/LckAndLove/serial-mcp.git
-cd serial-mcp
+codex mcp add serial -- npx -y @lckandyou/serial-mcp
 ```
 
-### 2. 安装依赖
-
+### 验证是否安装成功
 ```bash
-cd serial-virtual && npm install
-cd ../serial-db && npm install
-cd ../serial-mcp && npm install
-```
-
-### 使用流程
-
-1. 真实硬件用户：直接打开 Claude Code 即可，MCP Server 会自动启动后台服务
-2. 虚拟设备用户：双击 `start-all.bat` 启动虚拟单片机，再打开 Claude Code
-3. 告诉 AI 你的设备串口信息，开始调试
-
-无需手动启动任何其他服务。
-
-### 配置 Claude Code
-
-安装 Claude Code：
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-项目根目录已包含 `.mcp.json`，重启 Claude Code 自动连接。
-
-手动添加：
-```bash
-claude mcp add serial -- node "项目路径\serial-mcp\server.js"
-```
-
-验证：
-```bash
+# Claude Code
 claude mcp list
-# 看到 serial · ✔ connected 即成功
-```
 
-添加 MCP：
-```bash
-codex mcp add serial -- node "项目路径\serial-mcp\server.js"
-```
-
-验证：
-```bash
+# Codex CLI  
 codex mcp list
 ```
+
+看到 serial 状态为 connected 即成功。
+
+## 使用方式
+安装完成后，直接告诉 AI 你的串口信息：
+"我的设备接在 COM5，波特率 115200，帮我连接并开始调试"
+
+AI 会自动完成连接，无需任何额外配置。
 
 ## MCP 工具列表
 

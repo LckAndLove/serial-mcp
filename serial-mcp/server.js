@@ -1,9 +1,11 @@
+#!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 
 import Database from "better-sqlite3";
 import { SerialPort } from "serialport";
@@ -20,6 +22,10 @@ const __dirname = path.dirname(__filename);
 
 // 日志文件路径
 const LOG_FILE = path.join(__dirname, "mcp.log");
+const DATA_DIR = path.join(os.homedir(), ".serial-mcp");
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_PATH = path.join(DATA_DIR, "serial.db");
+const LOCK_FILE = path.join(DATA_DIR, "listener.lock");
 
 function loadRuntimeConfig() {
   const configPath = path.join(__dirname, "config.json");
@@ -264,9 +270,8 @@ async function ensureListener() {
     // continue
   }
 
-  const lockFile = path.resolve(__dirname, "../serial-db/listener.lock");
-  if (fs.existsSync(lockFile)) {
-    const rawPid = fs.readFileSync(lockFile, "utf8").trim();
+  if (fs.existsSync(LOCK_FILE)) {
+    const rawPid = fs.readFileSync(LOCK_FILE, "utf8").trim();
     const pid = Number.parseInt(rawPid, 10);
     if (Number.isInteger(pid) && pid > 0) {
       try {
@@ -275,14 +280,14 @@ async function ensureListener() {
         return;
       } catch {
         try {
-          fs.unlinkSync(lockFile);
+          fs.unlinkSync(LOCK_FILE);
         } catch {
           // ignore stale lock cleanup errors
         }
       }
     } else {
       try {
-        fs.unlinkSync(lockFile);
+        fs.unlinkSync(LOCK_FILE);
       } catch {
         // ignore malformed lock cleanup errors
       }
@@ -293,7 +298,7 @@ async function ensureListener() {
   const isPkg = typeof process.pkg !== "undefined";
   const listenerPath = isPkg
     ? path.join(path.dirname(process.execPath), "serial-db-listener")
-    : path.resolve(__dirname, "../serial-db/listener.js");
+    : fileURLToPath(new URL("../serial-db/listener.js", import.meta.url));
   const listenerArgs = isPkg
     ? []
     : [listenerPath];
@@ -809,9 +814,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : null;
         const baudRate = Number(args.baudRate || 115200);
         const isPkg = typeof process.pkg !== "undefined";
+        const monitorPath = fileURLToPath(new URL("./monitor-window.js", import.meta.url));
         const monitorExe = isPkg
           ? path.join(path.dirname(process.execPath), "serial-monitor.exe")
-          : path.resolve(__dirname, "monitor-window.js");
+          : monitorPath;
         const cmd = isPkg
           ? `"${monitorExe}" ${port || ""} ${baudRate}`
           : `node "${monitorExe}" ${port || ""} ${baudRate}`;
@@ -850,17 +856,7 @@ async function shutdown() {
 }
 
 function initDatabase() {
-  // 从 config.json 读取数据库路径
-  const dbPath = path.resolve(__dirname, runtimeConfig.db?.path || "../serial-db/serial.db");
-  const dbDir = path.dirname(dbPath);
-
-  // 确保数据库目录存在，避免首次启动时报错
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-  }
-
-  // 同步创建/打开 SQLite 连接
-  db = new Database(dbPath);
+  db = new Database(DB_PATH);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS serial_data (
