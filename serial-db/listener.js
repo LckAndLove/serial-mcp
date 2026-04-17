@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { SerialPort } = require('serialport');
+const { ReadlineParser } = require('@serialport/parser-readline');
 const lockFile = path.resolve(__dirname, 'listener.lock');
 
 // 读取同目录配置文件
@@ -101,7 +102,7 @@ async function main() {
 
   const serialDb = new SerialDB(dbPath);
 
-  // key: portName, value: { port: SerialPort, sessionId, baudRate, buffer, ...handlers }
+  // key: portName, value: { port: SerialPort, parser, sessionId, baudRate, ...handlers }
   const connectedPorts = new Map();
 
   function getStatus() {
@@ -122,8 +123,9 @@ async function main() {
     if (!state) return false;
 
     const serialPort = state.port;
+    const parser = state.parser;
 
-    if (state.dataHandler) serialPort.off('data', state.dataHandler);
+    if (state.dataHandler && parser) parser.off('data', state.dataHandler);
     if (state.errorHandler) serialPort.off('error', state.errorHandler);
     if (state.closeHandler) serialPort.off('close', state.closeHandler);
 
@@ -140,29 +142,23 @@ async function main() {
 
   function attachHandlers(portName, state) {
     const serialPort = state.port;
+    const parser = state.parser;
 
-    state.dataHandler = (chunk) => {
-      state.buffer += chunk.toString('utf8');
+    state.dataHandler = (line) => {
+      const raw = String(line);
+      console.log(`[${formatTimestamp()}] [${portName}] ${raw}`);
 
-      const parts = state.buffer.split(delimiter);
-      state.buffer = parts.pop() || '';
-
-      for (const item of parts) {
-        const raw = item;
-        console.log(`[${formatTimestamp()}] [${portName}] ${raw}`);
-
-        try {
-          serialDb.insertRow({
-            port: portName,
-            timestamp: Date.now(),
-            direction: 'rx',
-            raw: Buffer.from(raw, 'utf8'),
-            text: raw,
-            session_id: state.sessionId,
-          });
-        } catch (err) {
-          console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
-        }
+      try {
+        serialDb.insertRow({
+          port: portName,
+          timestamp: Date.now(),
+          direction: 'rx',
+          raw: Buffer.from(raw, 'utf8'),
+          text: raw,
+          session_id: state.sessionId,
+        });
+      } catch (err) {
+        console.error(`[${formatTimestamp()}] [${portName}] 写库失败:`, err.message || err);
       }
     };
 
@@ -178,7 +174,7 @@ async function main() {
       console.log(`[${formatTimestamp()}] [${portName}] 串口已断开`);
     };
 
-    serialPort.on('data', state.dataHandler);
+    parser.on('data', state.dataHandler);
     serialPort.on('error', state.errorHandler);
     serialPort.on('close', state.closeHandler);
   }
@@ -221,14 +217,16 @@ async function main() {
       await closePortState(portName);
     }
 
+    const parser = serialPort.pipe(new ReadlineParser({ delimiter }));
+
     const state = {
       port: serialPort,
+      parser,
       sessionId: serialDb.newSession(),
       baudRate,
       dataBits,
       stopBits,
       parity,
-      buffer: '',
       dataHandler: null,
       errorHandler: null,
       closeHandler: null,
