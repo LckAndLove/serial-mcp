@@ -67,6 +67,14 @@ function sendToPort(port, data, encoding) {
   });
 }
 
+function ensureTextFrame(data) {
+  if (data.includes('\r') || data.includes('\n')) {
+    return data;
+  }
+
+  return `${data}\r\n`;
+}
+
 function Monitor() {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -210,7 +218,12 @@ function Monitor() {
 
     if (!val.startsWith('/')) {
       const data = mode === 'text'
-        ? val.replace(/\\r/g, '\r').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+        ? ensureTextFrame(
+            val
+              .replace(/\\r/g, '\r')
+              .replace(/\\n/g, '\n')
+              .replace(/\\t/g, '\t')
+          )
         : val;
       try {
         const result = await sendToPort(portName, data, mode);
