@@ -809,12 +809,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : null;
         const baudRate = Number(args.baudRate || 115200);
         const monitorWindowPath = path.resolve(__dirname, "monitor-window.js");
-        const cmd = `node "${monitorWindowPath}"${port ? ` ${port}` : ""}`;
+        const portArg = port ? ` ${port}` : "";
+        const psCmd = `Start-Process cmd -ArgumentList '/k node \\"${monitorWindowPath}\\"${portArg}'`;
 
-        spawn("cmd.exe", [
-          "/c", "start", "\"\"",
-          "cmd", "/k", cmd,
-        ], {
+        spawn("powershell.exe", ["-NoProfile", "-Command", psCmd], {
           detached: true,
           stdio: "ignore",
         }).unref();
