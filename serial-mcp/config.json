@@ -9,6 +9,9 @@
   "listener": {
     "url": "http://localhost:7070"
   },
+  "http": {
+    "port": 7070
+  },
   "response": {
     "timeout": 3000
   }

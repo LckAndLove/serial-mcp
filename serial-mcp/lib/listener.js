@@ -13,10 +13,13 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'serial.db');
 const LOCK_FILE = path.join(DATA_DIR, 'listener.lock');
 
-// 读取 serial-mcp 目录配置文件
-const configPath = path.join(__dirname, '..', 'config.json');
-const rawConfig = fs.readFileSync(configPath, 'utf8');
-const config = JSON.parse(rawConfig);
+let config = {};
+try {
+  const configPath = fileURLToPath(new URL('../config.json', import.meta.url));
+  config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+} catch {
+  // 使用默认配置
+}
 
 // 统一格式化日志时间戳：[YYYY-MM-DD HH:mm:ss]
 function formatTimestamp(date = new Date()) {
@@ -79,19 +82,13 @@ function sendJson(res, code, payload) {
 async function main() {
   const serialCfg = config.serial || {};
   const dbCfg = config.db || {};
-  const httpCfg = config.http || {};
 
   const delimiter = serialCfg.delimiter || '\r\n';
+  const baudRate = Number(serialCfg.baudRate || 115200);
   const idleFrameMs = Number(serialCfg.idleFrameMs ?? 30);
-  const cleanupInterval = Number(dbCfg.cleanupInterval || 60000);
-  const maxRows = Number(dbCfg.maxRows || 10000);
-  const HTTP_PORT = Number(httpCfg.port);
-
-  if (!Number.isInteger(HTTP_PORT) || HTTP_PORT <= 0) {
-    console.error(`[${formatTimestamp()}] 配置错误: config.json 缺少有效的 http.port`);
-    process.exit(1);
-    return;
-  }
+  const CLEANUP_INTERVAL = Number(dbCfg.cleanupInterval || 60000);
+  const MAX_ROWS = Number(dbCfg.maxRows || 10000);
+  const HTTP_PORT = Number(config?.http?.port || 7070);
 
   fs.writeFileSync(LOCK_FILE, String(process.pid));
   const cleanupLock = () => {
@@ -265,7 +262,7 @@ async function main() {
       throw new Error('port is required');
     }
 
-    const baudRate = Number(options.baudRate || 115200);
+    const baudRate = Number(options.baudRate || serialCfg.baudRate || 115200);
     const dataBits = Number(options.dataBits || 8);
     const stopBits = Number(options.stopBits || 1);
     const parity = typeof options.parity === 'string' ? options.parity : 'none';
@@ -484,14 +481,14 @@ async function main() {
 
   setInterval(() => {
     try {
-      const deleted = serialDb.cleanup(maxRows);
+      const deleted = serialDb.cleanup(MAX_ROWS);
       if (deleted > 0) {
         logInfo(`[${formatTimestamp()}] cleanup 删除 ${deleted} 条旧数据`);
       }
     } catch (err) {
       console.error(`[${formatTimestamp()}] cleanup 执行失败:`, err.message || err);
     }
-  }, cleanupInterval);
+  }, CLEANUP_INTERVAL);
 }
 
 main().catch((err) => {
