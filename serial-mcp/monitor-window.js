@@ -14,6 +14,7 @@ const dbPath = path.resolve(__dirname, '../serial-db/serial.db');
 const COMMANDS = [
   { cmd: '/text', desc: '切换文本模式' },
   { cmd: '/hex', desc: '切换 HEX 模式' },
+  { cmd: '/eol', desc: '自动追加 CRLF  /eol <on|off>' },
   { cmd: '/timer', desc: '定时发送  /timer <ms> <data>' },
   { cmd: '/timers', desc: '查看定时任务' },
   { cmd: '/stop', desc: '停止定时任务  /stop <id|all>' },
@@ -24,6 +25,8 @@ const COMMANDS = [
 
 const MAX_LOGS = 200;
 const isInputActive = Boolean(process.stdin?.isTTY);
+const CLAUDE_ACCENT = '#D97757';
+const MAX_HINT_VISIBLE = 6;
 const h = React.createElement;
 
 function sendToPort(port, data, encoding) {
@@ -75,6 +78,31 @@ function ensureTextFrame(data) {
   return `${data}\r\n`;
 }
 
+function normalizeHexPayload(value) {
+  const cleaned = String(value ?? '')
+    .replace(/0x/gi, '')
+    .replace(/\s+/g, '')
+    .trim();
+
+  if (!cleaned) {
+    return { ok: false, error: 'HEX 不能为空' };
+  }
+
+  if (!/^[0-9a-fA-F]+$/.test(cleaned)) {
+    return { ok: false, error: 'HEX 只能包含 0-9 A-F（可带空格或0x前缀）' };
+  }
+
+  if (cleaned.length % 2 !== 0) {
+    return { ok: false, error: 'HEX 长度必须为偶数（每2位为1字节）' };
+  }
+
+  return { ok: true, hex: cleaned.toUpperCase() };
+}
+
+function ensureHexFrame(hex) {
+  return hex.endsWith('0D0A') ? hex : `${hex}0D0A`;
+}
+
 function formatDisplayText(value) {
   return String(value ?? '')
     .replace(/\r/g, '\\r')
@@ -86,10 +114,12 @@ function Monitor() {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const termHeight = stdout?.rows || 24;
+  const termWidth = stdout?.columns || 80;
 
   const [logs, setLogs] = useState([]);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('text');
+  const [autoEol, setAutoEol] = useState(false);
   const [hints, setHints] = useState([]);
   const [hintIndex, setHintIndex] = useState(0);
 
@@ -227,27 +257,28 @@ function Monitor() {
       return;
     }
 
-    if (hints.length > 0 && val.startsWith('/') && !val.includes(' ')) {
-      const selected = hints[hintIndex];
-      if (selected) {
-        setInput(`${selected.cmd} `);
-        return;
-      }
-    }
-
     setInput('');
     setHints([]);
     setHintIndex(0);
 
     if (!val.startsWith('/')) {
-      const data = mode === 'text'
-        ? ensureTextFrame(
-            val
-              .replace(/\\r/g, '\r')
-              .replace(/\\n/g, '\n')
-              .replace(/\\t/g, '\t')
-          )
-        : val;
+      let data;
+
+      if (mode === 'text') {
+        const rawText = val
+          .replace(/\\r/g, '\r')
+          .replace(/\\n/g, '\n')
+          .replace(/\\t/g, '\t');
+        data = autoEol ? ensureTextFrame(rawText) : rawText;
+      } else {
+        const parsed = normalizeHexPayload(val);
+        if (!parsed.ok) {
+          addMsg(`✗ ${parsed.error}`, 'red');
+          return;
+        }
+        data = autoEol ? ensureHexFrame(parsed.hex) : parsed.hex;
+      }
+
       try {
         const result = await sendToPort(portName, data, mode);
         if (!result.success) {
@@ -271,13 +302,38 @@ function Monitor() {
         setMode('hex');
         addMsg('── 已切换到 HEX 模式 ──');
         break;
+      case '/eol': {
+        const arg = String(parts[1] || '').toLowerCase();
+        if (arg === 'on') {
+          setAutoEol(true);
+          addMsg('── 自动追加 CRLF：ON ──');
+        } else if (arg === 'off') {
+          setAutoEol(false);
+          addMsg('── 自动追加 CRLF：OFF ──');
+        } else {
+          addMsg(`当前自动追加 CRLF：${autoEol ? 'ON' : 'OFF'}，用法：/eol <on|off>`, 'gray');
+        }
+        break;
+      }
       case '/timer': {
         const ms = parseInt(parts[1], 10);
-        const data = parts.slice(2).join(' ');
+        let data = parts.slice(2).join(' ');
         if (!ms || !data) {
           addMsg('✗ 用法：/timer <ms> <data>', 'red');
           break;
         }
+
+        if (mode === 'hex') {
+          const parsed = normalizeHexPayload(data);
+          if (!parsed.ok) {
+            addMsg(`✗ ${parsed.error}`, 'red');
+            break;
+          }
+          data = autoEol ? ensureHexFrame(parsed.hex) : parsed.hex;
+        } else if (mode === 'text' && autoEol) {
+          data = ensureTextFrame(data);
+        }
+
         const id = nextIdRef.current++;
         const timerMode = mode;
         const handle = setInterval(() => {
@@ -344,6 +400,14 @@ function Monitor() {
     }
 
     if (key.return) {
+      if (hints.length > 0 && input.startsWith('/') && !input.includes(' ')) {
+        const selected = hints[hintIndex];
+        if (selected) {
+          handleSubmit(selected.cmd);
+          return;
+        }
+      }
+
       handleSubmit(input);
       return;
     }
@@ -355,14 +419,14 @@ function Monitor() {
 
     if (key.upArrow) {
       if (hints.length > 0) {
-        setHintIndex((prev) => Math.max(0, prev - 1));
+        setHintIndex((prev) => (prev - 1 + hints.length) % hints.length);
       }
       return;
     }
 
     if (key.downArrow) {
       if (hints.length > 0) {
-        setHintIndex((prev) => Math.min(hints.length - 1, prev + 1));
+        setHintIndex((prev) => (prev + 1) % hints.length);
       }
       return;
     }
@@ -384,9 +448,14 @@ function Monitor() {
     }
   }, { isActive: isInputActive });
 
-  const hintHeight = hints.length > 0 ? Math.min(hints.length, 8) + 2 : 0;
-  const logHeight = Math.max(5, termHeight - 2 - 3 - hintHeight);
-  const visibleLogs = useMemo(() => logs.slice(-Math.max(1, logHeight - 2)), [logs, logHeight]);
+  const visibleHintCount = Math.min(hints.length, MAX_HINT_VISIBLE);
+  const maxHintStart = Math.max(0, hints.length - MAX_HINT_VISIBLE);
+  const hintStart = Math.min(Math.max(0, hintIndex - (MAX_HINT_VISIBLE - 1)), maxHintStart);
+  const visibleHints = hints.slice(hintStart, hintStart + MAX_HINT_VISIBLE);
+  const hintHeight = visibleHintCount > 0 ? visibleHintCount + 1 : 0;
+  const logHeight = Math.max(5, termHeight - 3 - hintHeight);
+  const visibleLogs = useMemo(() => logs.slice(-Math.max(1, logHeight)), [logs, logHeight]);
+  const separator = '─'.repeat(Math.max(10, termWidth));
 
   const logRows = visibleLogs.map((entry, i) => {
     if (entry.type === 'msg') {
@@ -408,66 +477,63 @@ function Monitor() {
       Text,
       { key: entry.key || `rx-${i}` },
       h(Text, { color: 'gray' }, `${entry.time}  `),
-      h(Text, { color: isHex ? 'cyan' : 'green' }, '◀  '),
-      h(Text, { color: isHex ? 'cyan' : 'green' }, entry.text)
+      h(Text, { color: isHex ? 'cyan' : CLAUDE_ACCENT }, '◀  '),
+      h(Text, { color: isHex ? 'cyan' : CLAUDE_ACCENT }, entry.text)
     );
   });
 
-  const hintRows = hints.slice(0, 8).map((c, i) =>
+  const hintRows = visibleHints.map((c, i) => {
+    const actualIndex = hintStart + i;
+    return (
     h(
-      Box,
-      { key: i },
+      Text,
+      { key: `hint-${c.cmd}` },
       h(
         Text,
         {
-          color: i === hintIndex ? 'white' : 'green',
-          bold: i === hintIndex,
-          backgroundColor: i === hintIndex ? 'blue' : undefined
+          color: actualIndex === hintIndex ? 'black' : CLAUDE_ACCENT,
+          bold: actualIndex === hintIndex,
+          backgroundColor: actualIndex === hintIndex ? 'white' : undefined
         },
-        c.cmd.padEnd(10)
+        c.cmd.padEnd(10, ' ')
       ),
       h(Text, { color: 'gray' }, `  ${c.desc}`)
     )
   );
+  });
 
   return h(
     Box,
     { flexDirection: 'column', height: termHeight },
-    h(
-      Box,
-      { borderStyle: 'single', borderColor: 'gray', paddingX: 1 },
-      h(Text, { color: 'cyan', bold: true }, `串口监控  ${portName}`),
-      h(Text, { color: 'gray' }, `  │  ${baudRate} baud`)
-    ),
+    h(Text, { color: 'cyan', bold: true }, `serial-monitor  ${portName}  ${baudRate} baud`),
+    h(Text, { color: 'gray' }, separator),
     h(
       Box,
       {
         flexDirection: 'column',
         height: logHeight,
-        borderStyle: 'single',
-        borderColor: 'gray',
         overflow: 'hidden',
-        paddingX: 1
+        paddingX: 0
       },
       ...logRows
     ),
+    h(Text, { color: 'gray' }, separator),
     h(
-      Box,
-      { borderStyle: 'single', borderColor: 'cyan', paddingX: 1, height: 3 },
-      h(Text, { color: 'green', bold: true }, `${portName}  [${mode}] ❯ `),
+      Text,
+      null,
+      h(Text, { color: CLAUDE_ACCENT, bold: true }, `${portName} [${mode}${autoEol ? ',eol' : ''}] ❯ `),
       h(Text, { color: 'white' }, input),
       h(Text, { color: 'white', bold: true }, '█')
     ),
-    hints.length > 0
+    visibleHintCount > 0
       ? h(
           Box,
           {
             flexDirection: 'column',
-            borderStyle: 'single',
-            borderColor: 'gray',
-            paddingX: 1,
+            paddingX: 0,
             height: hintHeight
           },
+          h(Text, { color: 'gray' }, 'commands'),
           ...hintRows
         )
       : null
