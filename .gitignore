@@ -1,6 +1,10 @@
-node_modules
+node_modules/
 *.db
 .env
+*.local.json
+serial-db/serial.db
+serial-db/serial.db-shm
+serial-db/serial.db-wal
 
 # Claude 本地设置
 .claude/

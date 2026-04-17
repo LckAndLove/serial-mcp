@@ -1,0 +1,8 @@
+{
+  "virtualPort": {
+    "portA": "COM_PORT",
+    "portB": "COM_PORT",
+    "baudRate": 115200,
+    "autoOutputInterval": 1000
+  }
+}
