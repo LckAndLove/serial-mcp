@@ -428,6 +428,18 @@ const tools = [
       additionalProperties: false,
     },
   },
+  {
+    name: "open_monitor",
+    description: "打开一个独立的命令行窗口，实时显示串口数据。TX 和 RX 数据都会显示，带时间戳。关闭窗口即停止监控，不影响串口连接。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        port: { type: "string" },
+        baudRate: { type: "integer", minimum: 1 },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const server = new Server(
@@ -789,6 +801,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         throw new Error("action 必须是 snapshot 或 detect");
+      }
+
+      case "open_monitor": {
+        const port = typeof args.port === "string" && args.port.trim() !== ""
+          ? args.port.trim()
+          : null;
+        const baudRate = Number(args.baudRate || 115200);
+        const monitorWindowPath = path.resolve(__dirname, "monitor-window.js");
+        const quotedScript = `"${monitorWindowPath}"`;
+        const portArg = port ? ` "${port}"` : "";
+        const command = `node ${quotedScript}${portArg}`;
+
+        spawn("cmd.exe", [
+          "/c", "start", "串口监控",
+          "cmd", "/k", command,
+        ], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+
+        return jsonResult({
+          success: true,
+          port,
+          baudRate,
+          message: `监控窗口已打开，port: ${port || "ALL"}`,
+        });
       }
 
       default:
