@@ -574,7 +574,7 @@ function Monitor() {
         Text,
         { key: entry.key || `tx-${i}` },
         h(Text, { color: 'gray' }, `${entry.time}  `),
-        h(Text, { color: 'yellow' }, '▶  '),
+        h(Text, { color: 'yellow', bold: true }, 'TX ▶  '),
         h(Text, { color: 'white' }, entry.text)
       );
     }
@@ -583,7 +583,7 @@ function Monitor() {
       Text,
       { key: entry.key || `rx-${i}` },
       h(Text, { color: 'gray' }, `${entry.time}  `),
-      h(Text, { color: isHex ? 'cyan' : CLAUDE_ACCENT }, '◀  '),
+      h(Text, { color: isHex ? 'cyan' : CLAUDE_ACCENT, bold: true }, 'RX ◀  '),
       h(Text, { color: isHex ? 'cyan' : CLAUDE_ACCENT }, entry.text)
     );
   });

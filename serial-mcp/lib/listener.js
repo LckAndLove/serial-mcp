@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { SerialPort } from 'serialport';
 import SerialDB from './db.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentFile = fileURLToPath(import.meta.url);
+const currentDir = path.dirname(currentFile);
 const DATA_DIR = path.join(os.homedir(), '.serial-mcp');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'serial.db');
