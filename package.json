@@ -1,6 +1,6 @@
 {
   "name": "serial-mcp",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "type": "module",
   "scripts": {
     "start": "node serial-mcp/server.js",
