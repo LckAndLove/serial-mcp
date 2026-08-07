@@ -1,6 +1,6 @@
 {
   "name": "serial-mcp",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "嵌入式 AI 调试串口 MCP 服务，让 Claude Code / Codex CLI 直接读写串口数据",
   "type": "module",
   "main": "server.js",
@@ -33,7 +33,7 @@
     "url": "git+https://github.com/LckAndLove/serial-mcp.git"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.0.0",

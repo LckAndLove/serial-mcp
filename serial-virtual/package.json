@@ -4,7 +4,7 @@
   "description": "虚拟串口设备与监控工具",
   "main": "index.js",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "serialport": "^13.0.0"
