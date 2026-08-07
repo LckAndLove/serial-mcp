@@ -1,8 +1,18 @@
 # Changelog
 
+## [v3.0.0] - 2026-08-07
+### 变更
+- 升级到 MCP TypeScript SDK v2，支持 `2026-07-28` 协议协商并兼容 legacy 客户端
+- 运行方式统一为 Node.js 20+ + npm，移除 exe/pkg 构建链
+
+### 安全修复
+- listener HTTP 接口改为随机 bearer token 鉴权，默认关闭跨域调用
+- `open_monitor` 改为参数数组启动 Node 进程，移除临时 bat 和 shell 解释器路径
+- 为串口路径、串口接收缓冲区和 `send_and_wait` 超时增加边界校验
+
 ## [v2.0.6] - 2026-04-17
 ### 修复
-- open_monitor 改用 explorer.exe + bat 文件绕过 session 限制，监控窗口正常弹出
+- open_monitor 修复 Windows 会话下的监控窗口启动问题
 
 ## [v2.0.5] - 2026-04-17
 ### 修复

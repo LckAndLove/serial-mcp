@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { SerialPort } = require('serialport');
+const MAX_INPUT_BUFFER = 64 * 1024;
 
 // 生成统一格式时间戳：[YYYY-MM-DD HH:mm:ss]
 function getTimestamp() {
@@ -91,6 +92,12 @@ async function main() {
   // 接收指令并返回对应响应
   port.on('data', (chunk) => {
     inputBuffer += chunk.toString('utf8');
+
+    if (Buffer.byteLength(inputBuffer, 'utf8') > MAX_INPUT_BUFFER) {
+      logWithTimestamp(`输入帧超过 ${MAX_INPUT_BUFFER} 字节，已丢弃`);
+      inputBuffer = '';
+      return;
+    }
 
     let idx = inputBuffer.indexOf('\r\n');
     while (idx !== -1) {

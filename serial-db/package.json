@@ -1,8 +1,12 @@
 {
   "name": "serial-db",
+  "version": "3.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
-    "serialport": "*"
+    "serialport": "^13.0.0"
   },
   "scripts": {
     "start": "node listener.js"

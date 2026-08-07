@@ -8,25 +8,32 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        node-version: ['20.x', '22.x']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
           cache-dependency-path: |
             serial-db/package-lock.json
             serial-mcp/package-lock.json
       - name: 安装依赖
         run: |
-          cd serial-db && npm install
-          cd ../serial-mcp && npm install
+          cd serial-db && npm ci
+          cd ../serial-mcp && npm ci
+          cd ../serial-virtual && npm ci
       - name: 语法检查
         run: |
           node --check serial-db/listener.js
           node --check serial-db/db.js
           node --check serial-mcp/server.js
           node --check serial-mcp/monitor-window.js
+          node --check serial-virtual/virtual-device.js
+      - name: 自动化测试
+        run: npm test
       - name: 启动检查
         run: |
           cd serial-mcp
