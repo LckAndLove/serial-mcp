@@ -44,6 +44,14 @@ claude mcp list
 # 看到 serial · ✔ connected 即成功
 ```
 
+### npx 启动失败（better-sqlite3 install script 被限制）
+
+如果 npm 策略禁止依赖安装脚本，`better-sqlite3` 可能缺失原生绑定，`npx` 启动会在握手前失败。可显式允许该依赖脚本：
+
+```bash
+npx -y --allow-scripts=better-sqlite3 serial-mcp@latest
+```
+
 ## 使用方式
 
 安装完成后，直接告诉 AI：
@@ -156,4 +164,3 @@ MIT © lckandyou
 - [GitHub](https://github.com/LckAndLove/serial-mcp)
 - [npm](https://www.npmjs.com/package/serial-mcp)
 - [Issues](https://github.com/LckAndLove/serial-mcp/issues)
-

@@ -5,7 +5,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "^13.0.3",
     "serialport": "^13.0.0"
   },
   "scripts": {

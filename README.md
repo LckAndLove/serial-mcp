@@ -106,8 +106,15 @@ claude mcp list
 # Codex CLI  
 codex mcp list
 ```
-
 看到 serial 状态为 connected 即成功。
+
+### npx 启动失败（better-sqlite3 install script 被限制）
+
+若 npm 策略禁止依赖安装脚本，`better-sqlite3` 可能缺失原生绑定并导致 `npx` 在 MCP 握手前退出。可显式允许该依赖脚本：
+
+```bash
+npx -y --allow-scripts=better-sqlite3 serial-mcp@latest
+```
 
 ### 卸载
 ```bash
@@ -163,4 +170,3 @@ A: 烧录完成后调用 `new_session` 创建新会话，后续用 `session_id` 
 ## License
 
 MIT
-

@@ -133,6 +133,21 @@ function toUserError(error, fallback = "操作失败") {
   return text;
 }
 
+function isMissingBetterSqliteBindingError(error) {
+  let current = error;
+  while (current instanceof Error) {
+    const text = current.message || "";
+    if (
+      /better-sqlite3/i.test(text)
+      && (/Could not locate the bindings file/i.test(text) || /原生绑定缺失/.test(text))
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 function normalizeTimestamp(input) {
   // 支持 ISO 字符串或毫秒时间戳，统一返回毫秒整数
   if (typeof input === "number") {
@@ -894,19 +909,29 @@ async function shutdown() {
 }
 
 function initDatabase() {
-  db = new Database(DB_PATH);
+  try {
+    db = new Database(DB_PATH);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS serial_data (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      port TEXT,
-      timestamp INTEGER,
-      direction TEXT,
-      raw BLOB,
-      text TEXT,
-      session_id TEXT
-    )
-  `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS serial_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        port TEXT,
+        timestamp INTEGER,
+        direction TEXT,
+        raw BLOB,
+        text TEXT,
+        session_id TEXT
+      )
+    `);
+  } catch (error) {
+    if (isMissingBetterSqliteBindingError(error)) {
+      throw new Error(
+        "better-sqlite3 原生绑定缺失（通常是 npm install script 被限制）。请改为允许 better-sqlite3 脚本后重试。",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 process.on("SIGINT", async () => {
@@ -956,6 +981,19 @@ async function main() {
 }
 
 main().catch((err) => {
-  logError("[serial-mcp] 启动失败:", err instanceof Error ? err.message : String(err));
+  const message = err instanceof Error ? err.message : String(err);
+  logError("[serial-mcp] 启动失败:", message);
+  if (isMissingBetterSqliteBindingError(err)) {
+    process.stderr.write(
+      [
+        "[serial-mcp] 启动失败：未找到 better-sqlite3 原生绑定文件。",
+        "[serial-mcp] 当前环境可能禁止了依赖安装脚本，导致 better-sqlite3 未完成原生模块准备。",
+        "[serial-mcp] 请允许 better-sqlite3 安装脚本后重试，例如：",
+        "npx -y --allow-scripts=better-sqlite3 serial-mcp@latest",
+      ].join("\n") + "\n",
+    );
+  } else {
+    process.stderr.write(`[serial-mcp] 启动失败: ${message}\n`);
+  }
   process.exit(1);
 });
